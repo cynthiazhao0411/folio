@@ -16,7 +16,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" href="favicon.png">
 
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=1.1.0">
 </head>
 <body>
 
@@ -25,26 +25,66 @@
     <header class="shelf-head">
       <h1>我的书架</h1>
       <div class="head-actions">
+        <button id="btn-stats" class="icon-btn" aria-label="阅读统计">
+          <svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 20V11M12 20V5M19 20v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
         <button id="btn-more" class="icon-btn" aria-label="更多">⋯</button>
-        <label class="import-btn">
-          ＋ 导入
-          <input type="file" id="picker" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
-        </label>
+        <button id="btn-import" class="import-btn">＋ 导入</button>
+        <input type="file" id="picker" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
       </div>
     </header>
+
+    <input type="file" id="cover-picker" accept="image/*" hidden>
+
+    <!-- Multi-select mode -->
+    <div id="select-top" class="select-top hidden">
+      <button class="text-btn muted" data-close>完成</button>
+      <span class="st-count">选择书籍</span>
+      <button class="text-btn" data-sa>全选</button>
+    </div>
+    <div id="select-bar" class="select-bar hidden">
+      <button data-act="pin" data-icon="pin" data-label="置顶"></button>
+      <button data-act="move" data-icon="folder" data-label="文件夹"></button>
+      <button data-act="tags" data-icon="tag" data-label="标签"></button>
+      <button data-act="cover" data-icon="image" data-label="封面"></button>
+      <button data-act="hide" data-icon="hide" data-label="隐藏"></button>
+      <button data-act="more" data-icon="more" data-label="更多"></button>
+    </div>
+
+    <!-- Reading statistics -->
+    <div id="stats-sheet" class="sheet-modal fixed hidden">
+      <div class="sheet-card tall stats-card">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <button class="sheet-x" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="sheet-tabs"><button class="on">阅读统计</button></div>
+          <span></span>
+        </div>
+        <div class="st-tabs"></div>
+        <div class="sheet-scroll st-body"></div>
+      </div>
+    </div>
 
     <!-- More menu: backup / restore -->
     <div id="more-sheet" class="sheet-modal fixed hidden">
       <div class="sheet-card">
         <div class="sheet-grip"></div>
+        <button class="sheet-item" id="btn-hidden">隐藏的书<small>查看和管理隐藏起来的书</small></button>
         <button class="sheet-item" id="btn-backup">备份书架<small>把所有书和进度存成一个文件</small></button>
         <label class="sheet-item">恢复备份<small>选之前存的备份文件</small>
           <input type="file" id="restore-picker" accept=".json,application/json" hidden>
         </label>
         <button class="sheet-item cancel" id="btn-more-close">取消</button>
+        <div class="app-version">Folio v1.1.0</div>
       </div>
     </div>
-    <p id="shelf-count" class="shelf-count"></p>
+    <div class="shelf-sub">
+      <p id="shelf-count" class="shelf-count"></p>
+      <button id="btn-select" class="text-btn hidden">选择</button>
+    </div>
+    <div id="chips" class="chips"></div>
     <div id="grid" class="grid"></div>
   </section>
 
@@ -57,12 +97,20 @@
         <div class="running header"></div>
         <div class="page"><div class="flow"></div></div>
         <div class="running footer"></div>
+        <div class="ribbon"></div>
+        <div class="title-page"></div>
       </div></div>
       <div class="view"><div class="view-inner">
         <div class="running header"></div>
         <div class="page"><div class="flow"></div></div>
         <div class="running footer"></div>
+        <div class="ribbon"></div>
+        <div class="title-page"></div>
       </div></div>
+      <div id="pull-ind" class="pull-ind">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        <span>下拉添加书签</span>
+      </div>
       <div id="curl-shadow" class="curl-shadow"></div>
       <div id="curl-back" class="curl-back"></div>
     </div>
@@ -70,7 +118,9 @@
     <div id="topbar" class="bar">
       <button id="btn-back">‹ 书架</button>
       <span id="book-title"></span>
-      <span class="bar-spacer"></span>
+      <button id="btn-bookmark" class="bar-icon" aria-label="书签">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
     </div>
     <div id="bottombar" class="bar">
       <button id="btn-toc"><b>☰</b>目录</button>
@@ -80,13 +130,22 @@
       <button id="btn-turn"><b>❏</b><span>仿真</span></button>
     </div>
 
-    <div id="toc-panel" class="panel hidden"></div>
+    <div id="sel-layer"></div>
+    <div id="sel-menu" class="hidden"></div>
+    <div id="toc-panel" class="sheet-modal hidden"></div>
+    <div id="note-editor" class="hidden"></div>
     <div id="note-panel" class="sheet-modal hidden"></div>
   </section>
 
-  <script src="db.js"></script>
-  <script src="importer.js"></script>
-  <script src="reader.js"></script>
-  <script src="app.js"></script>
+  <script src="ui.js?v=1.1.0"></script>
+  <script src="db.js?v=1.1.0"></script>
+  <script src="importer.js?v=1.1.0"></script>
+  <script src="reader.js?v=1.1.0"></script>
+  <script src="annotations.js?v=1.1.0"></script>
+  <script src="stats.js?v=1.1.0"></script>
+  <script src="cover.js?v=1.1.0"></script>
+  <script src="epub.js?v=1.1.0"></script>
+  <script src="library.js?v=1.1.0"></script>
+  <script src="app.js?v=1.1.0"></script>
 </body>
 </html>

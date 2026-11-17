@@ -14,6 +14,8 @@ const Reader = {
   turnMode: 'curl',          // 'curl' | 'slide'
   busy: false,               // an animation is in progress
   onProgress: null,          // callback used by app.js to persist progress
+  coverHTML: null,           // set by app.js: renders a small cover for the TOC sheet
+  titlePageHTML: null,       // set by app.js: returns { cover, info } — the two front pages before chapter 1
   views: [], top: 0,         // the two sheets; `top` is the visible one
   layoutId: 0,               // bumped on resize/font change to invalidate layouts
   el: {},
@@ -21,10 +23,13 @@ const Reader = {
   init() {
     const $ = id => document.getElementById(id);
     this.el = { reader: $('reader'), stack: $('stack'), back: $('curl-back'), shadow: $('curl-shadow'),
-                title: $('book-title'), toc: $('toc-panel'), note: $('note-panel') };
+                title: $('book-title'), toc: $('toc-panel'), note: $('note-panel'),
+                selLayer: $('sel-layer'), selMenu: $('sel-menu'), noteEditor: $('note-editor'), btnBookmark: $('btn-bookmark'),
+                pull: $('pull-ind') };
     this.views = [...this.el.stack.querySelectorAll('.view')].map(v => ({
       el: v, inner: v.querySelector('.view-inner'), flow: v.querySelector('.flow'),
       header: v.querySelector('.header'), footer: v.querySelector('.footer'),
+      titlePage: v.querySelector('.title-page'),
       ch: -1, layout: -1, pages: 1,
     }));
     this.bindGestures();
@@ -47,6 +52,7 @@ const Reader = {
     let sum = 0;
     this.offsets = book.chapters.map(c => { const o = sum; sum += c.html.length; return o; });
     this.total = sum;
+    this.wordCount = book.chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
 
     this.el.title.textContent = book.title;
     this.el.reader.classList.remove('hidden');
@@ -68,11 +74,21 @@ const Reader = {
     const pad = Math.round(Math.max(24, W * 0.075));
     v.flow.style.setProperty('--pad', pad + 'px');
     v.flow.style.columnWidth = (W - pad * 2) + 'px';
+    // Chapter 1 starts with two empty pages reserved for the front matter (cover, then
+    // book info); those are drawn on top of the empty pages so they can fill the screen.
+    const front = ch === 0 && this.titlePageHTML;
+    if (front) {
+      const fp = this.titlePageHTML(this.book, this.wordCount);
+      v.titlePage.innerHTML = `<div class="fp fp-cover">${fp.cover}</div><div class="fp fp-info">${fp.info}</div>`;
+      fitTitles(v.titlePage);
+    }
     v.flow.innerHTML =
+      (front ? '<div class="cover-spacer"></div><div class="cover-spacer"></div>' : '') +
       `<h2 class="ch-title">${c.title}</h2>` +
       (c.notes ? `<div class="note-chip" data-note="start">✎ 作者注</div>` : '') +
-      clean(c.html) +
+      `<div class="ch-body">${clean(c.html)}</div>` +
       (c.endNotes ? `<div class="note-chip" data-note="end">✎ 章末作者注</div>` : '');
+    this.decorate(v, ch);                                   // highlights (annotations.js)
     v.pages = Math.max(1, Math.round((v.flow.scrollWidth + pad * 2) / W));
     v.ch = ch; v.layout = this.layoutId;
     return v.pages;
@@ -87,12 +103,25 @@ const Reader = {
     v.header.innerHTML = `<span>${c.title}</span>`;
     const pct = (this.offsets[ch] + c.html.length * (page + 1) / pages) / this.total * 100;
     v.footer.innerHTML = `<span>${page + 1} / ${pages}</span><span>${pct.toFixed(1)}%</span>`;
+    v.el.classList.toggle('on-front', this.isCover(ch, page));
+    v.el.classList.toggle('on-info', this.isCover(ch, page) && page === 1);
+    this.updateRibbon(v, ch, page);
     return { ch, page, pages, pct };
   },
 
+  isCover(ch, page) { return ch === 0 && page < 2 && !!this.titlePageHTML; },   // cover or info page
+
   // Record the current position and notify app.js
   commit(s) {
-    this.ch = s.ch; this.page = s.page; this.pages = s.pages;
+    this.ch = s.ch; this.page = s.page; this.pages = s.pages; this.pct = s.pct;
+    this.syncBookmarkBtn();
+    // Standalone mode: tint the status bar to match the full-bleed info page
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      const ip = s.ch === 0 && s.page === 1 && this.views[this.top].titlePage.querySelector('.ip');
+      meta.content = ip ? getComputedStyle(ip).getPropertyValue('--c').trim()
+                        : getComputedStyle(document.body).getPropertyValue('--bg').trim();
+    }
     this.onProgress?.({ ch: s.ch, frac: s.page / s.pages, pct: s.pct });
     // While idle, pre-layout the chapter the next turn is likely to need on the hidden sheet
     clearTimeout(this._pre);
@@ -122,6 +151,7 @@ const Reader = {
   },
 
   turn(dir) {
+    if (this.sel) this.clearSel();
     if (this.busy || !this.canStep(dir)) return;
     if (this.turnMode === 'curl') this.finishCurl(this.beginCurl(dir), true);
     else this.slide(dir);
@@ -146,8 +176,10 @@ const Reader = {
     this.commit(this.show(v, this.ch, Math.round(frac * pages)));
   },
 
+  // Jump to the start of a chapter's text. Chapter 1 begins after the two front pages.
   goChapter(ch) {
-    this.commit(this.show(this.views[this.top], ch, 0));
+    const first = ch === 0 && this.titlePageHTML ? 2 : 0;
+    this.commit(this.show(this.views[this.top], ch, first));
   },
 
   // ================= Page curl =================
@@ -181,11 +213,18 @@ const Reader = {
   finishCurl(c, complete) {
     const start = c.dir > 0 ? c.W : -c.W;
     const from = c.edge, to = complete ? -start : start;
-    const dur = 180 + Math.abs(to - from) / (2 * c.W) * 220;
+    // A tap turns the page from rest: ease-in-out, like lifting and laying down paper.
+    // After a drag the page is already moving: ease-out from the finger's position.
+    const fromRest = Math.abs(from - start) < 1;
+    const dist = Math.abs(to - from) / (2 * c.W);
+    const dur = fromRest ? 460 : 200 + dist * 260;
+    const ease = fromRest
+      ? t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+      : t => 1 - Math.pow(1 - t, 3);
     const t0 = performance.now();
     const tick = now => {
       const t = Math.min(1, (now - t0) / dur);
-      this.drawCurl(c, from + (to - from) * (1 - Math.pow(1 - t, 3)));   // ease-out
+      this.drawCurl(c, from + (to - from) * ease(t));
       if (t < 1) return requestAnimationFrame(tick);
       this.el.back.style.display = this.el.shadow.style.display = 'none';
       if (complete) {
@@ -201,20 +240,68 @@ const Reader = {
   // ================= Gestures =================
   bindGestures() {
     const area = this.el.stack;
-    let x0 = 0, y0 = 0, drag = null, moved = false, decided = false;
+    let x0 = 0, y0 = 0, drag = null, moved = false, decided = false, press = null, pulling = false;
 
     area.addEventListener('touchstart', e => {
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
-      moved = decided = false; drag = null;
+      moved = decided = pulling = false; drag = null;
+      clearTimeout(press);
+      // Long press (450 ms without moving) starts a text selection
+      if (e.touches.length === 1 && !this.busy && !this.sel) press = setTimeout(() => {
+        if (moved || drag) return;
+        if (this.beginSelect(x0, y0)) { this.selecting = true; moved = true; this.closeMenu(); }
+      }, 450);
     }, { passive: true });
-    area.addEventListener('mousedown', () => { moved = false; });   // desktop mouse clicks
+    // ---- Mouse (desktop testing) ----
+    // Drag to select text, or hold still for 450 ms to select the phrase under the pointer.
+    // Browsers also fire compatibility mouse events after a touch, so those are ignored.
+    let lastTouch = 0, mdown = null, mpress = null;
+    const startMouseSelect = () => {
+      if (!mdown || !this.beginSelect(mdown.x, mdown.y)) return false;
+      this.selecting = true; moved = true; this.closeMenu();
+      return true;
+    };
+    area.addEventListener('mousedown', e => {
+      if (Date.now() - lastTouch < 800 || e.button !== 0) return;
+      moved = false;
+      if (this.sel || this.busy) return;                   // the click that follows clears the selection
+      mdown = { x: e.clientX, y: e.clientY };
+      mpress = setTimeout(startMouseSelect, 450);
+    });
+    window.addEventListener('mousemove', e => {
+      if (!mdown) return;
+      if (this.selecting) return this.extendSelect(e.clientX, e.clientY);
+      if (Math.hypot(e.clientX - mdown.x, e.clientY - mdown.y) > 6) {
+        clearTimeout(mpress);
+        if (startMouseSelect()) this.extendSelect(e.clientX, e.clientY);
+        else mdown = null;
+      }
+    });
+    window.addEventListener('mouseup', () => {
+      clearTimeout(mpress);
+      if (!mdown) return;
+      mdown = null;
+      if (this.selecting) { this.selecting = false; this._selEnded = Date.now(); this.showSelMenu(); }
+    });
 
     area.addEventListener('touchmove', e => {
       e.preventDefault();                                  // prevent scrolling and rubber-banding
+      if (this.selecting) return this.extendSelect(e.touches[0].clientX, e.touches[0].clientY);
       const dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0;
+      if (pulling) return this.pullMove(dy);
       if (!decided && Math.hypot(dx, dy) > 10) {
         decided = true;
-        if (Math.abs(dx) < Math.abs(dy)) return;
+        clearTimeout(press);
+        if (this.sel) { moved = true; return this.clearSel(); }   // swiping dismisses a selection
+        if (Math.abs(dx) < Math.abs(dy)) {
+          // Pulling the page down adds (or removes) a bookmark
+          if (dy > 0 && !this.busy && !this.isCover(this.ch, this.page)) {
+            moved = pulling = true;
+            this.closeMenu();
+            this.pullStart();
+          }
+          return;
+        }
         moved = true;
         this.closeMenu();
         const dir = dx < 0 ? 1 : -1;
@@ -227,7 +314,11 @@ const Reader = {
     }, { passive: false });
 
     area.addEventListener('touchend', e => {
+      clearTimeout(press);
+      lastTouch = Date.now();
+      if (this.selecting) { this.selecting = false; this._selEnded = Date.now(); return this.showSelMenu(); }
       const dx = e.changedTouches[0].clientX - x0;
+      if (pulling) { pulling = false; return this.pullEnd(); }
       if (drag) {
         this.finishCurl(drag, drag.dir > 0 ? dx < -30 : dx > 30);
         drag = null;
@@ -237,7 +328,17 @@ const Reader = {
     });
 
     area.addEventListener('click', e => {
-      if (moved) return;
+      if (moved || Date.now() - (this._selEnded || 0) < 300) return;
+      if (this.sel) return this.clearSel();                // tap anywhere dismisses the selection menu
+      // Tapping the bookmark ribbon (with a generous margin around it) removes the bookmark
+      const top = this.views[this.top];
+      if (top.el.classList.contains('bookmarked')) {
+        const r = top.el.querySelector('.ribbon').getBoundingClientRect();
+        if (e.clientX > r.left - 20 && e.clientX < r.right + 20 && e.clientY < r.bottom + 20) return this.toggleBookmark();
+      }
+      const mark = e.target.closest('mark.hl');
+      if (mark) return this.editMark(mark.dataset.id);
+      if (e.target.closest('.ip-start')) return this.next();      // "start the story" on the info page
       const chip = e.target.closest('.note-chip');
       if (chip) return this.showNote(chip.dataset.note);
       if (e.target.closest('a')) return;
@@ -263,29 +364,100 @@ const Reader = {
     const p = this.el.note;
     p.innerHTML = `<div class="sheet-card"><div class="sheet-grip"></div>
       <h4>${which === 'end' ? '章末作者注' : '作者注'}</h4>
-      <div class="sheet-body">${which === 'end' ? c.endNotes : c.notes}</div></div>`;
-    p.classList.remove('hidden');
-    p.onclick = e => { if (e.target === p) p.classList.add('hidden'); };
+      <div class="sheet-body sheet-scroll">${which === 'end' ? c.endNotes : c.notes}</div></div>`;
+    Sheet.open(p);
   },
 
   // ================= Table of contents =================
-  showToc() {
-    const panel = this.el.toc;
-    panel.innerHTML =
-      `<div class="panel-head"><button class="panel-close">‹ 返回</button><h3>目录</h3><span></span></div>` +
-      this.book.chapters.map((c, i) =>
-        `<a href="#" data-i="${i}" class="${i === this.ch ? 'current' : ''}">${c.title}</a>`).join('');
-    panel.classList.remove('hidden');
-    panel.querySelector('.current')?.scrollIntoView({ block: 'center' });
-    panel.onclick = e => {
-      if (e.target.closest('.panel-close')) return panel.classList.add('hidden');
-      const a = e.target.closest('a');
+  // Bottom sheet with book info and three tabs: contents, bookmarks, notes
+  showToc(tab = 'toc') {
+    const b = this.book, modal = this.el.toc;
+    const pct = (this.pct || 0).toFixed(1);
+    const words = this.wordCount >= 10000 ? (this.wordCount / 10000).toFixed(2) + ' 万字' : this.wordCount + ' 字';
+    const marks = this.annots.filter(a => a.type === 'mark').sort((x, y) => x.ch - y.ch || x.start - y.start);
+    const bms = this.annots.filter(a => a.type === 'bookmark').sort((x, y) => x.ch - y.ch || x.start - y.start);
+    const date = ts => fmtTime(ts);
+    const chName = i => escapeHtml(b.chapters[i]?.title || '');
+    const empty = (icon, text) => `<div class="list-empty"><div class="le-icon">${icon}</div>${text}</div>`;
+
+    const tocList = b.chapters.map((c, i) => `<a href="#" data-ch="${i}" class="${i === this.ch ? 'current' : ''}">
+      <span>${c.title}</span><small>${i + 1}</small></a>`).join('');
+    const bmList = bms.length ? bms.map(a => `
+      <div class="li" data-ch="${a.ch}" data-off="${a.start}">
+        <div class="li-top"><span>${chName(a.ch)}</span><span>${date(a.createdAt)}</span></div>
+        <div class="li-text">${escapeHtml(a.text)}…</div>
+        <button class="li-del" data-del="${a.id}" aria-label="删除">删除</button>
+      </div>`).join('') : empty('🔖', '还没有书签<br><small>阅读时点顶部的书签按钮添加</small>');
+    const noteList = marks.length ? marks.map(a => `
+      <div class="li" data-ch="${a.ch}" data-off="${a.start}" data-id="${a.id}">
+        <div class="li-top"><span>${chName(a.ch)}</span><span>${date(a.updatedAt || a.createdAt)}</span></div>
+        <div class="li-quote c-${a.color}">${escapeHtml(a.text)}</div>
+        ${a.note ? `<div class="li-note">${escapeHtml(a.note)}</div>` : ''}
+        <button class="li-del" data-del="${a.id}" aria-label="删除">删除</button>
+      </div>`).join('') : empty('✎', '还没有划线或笔记<br><small>阅读时长按文字即可选择</small>');
+
+    modal.innerHTML = `
+      <div class="sheet-card tall">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <button class="sheet-x" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="sheet-tabs">
+            <button data-tab="toc">目录</button>
+            <button data-tab="bm">书签${bms.length ? `<sup>${bms.length}</sup>` : ''}</button>
+            <button data-tab="notes">笔记${marks.length ? `<sup>${marks.length}</sup>` : ''}</button>
+          </div>
+          <span class="sheet-x-space"></span>
+        </div>
+        <div class="toc-book">
+          ${this.coverHTML ? this.coverHTML(b) : ''}
+          <div class="toc-book-info">
+            <div class="tb-title">${b.title}</div>
+            <div class="tb-author">${b.authors.join('、')}</div>
+            <div class="tb-meta">${pct}% · ${b.chapters.length} 章 · ${words}</div>
+            ${(() => { const m = this.metaInfo?.(); if (!m?.readMs) return '';
+              return `<div class="tb-meta">已读 ${fmtDur(m.readMs, true)}${m.reads ? ` · 读完 ${m.reads} 遍` : ''}</div>`; })()}
+          </div>
+        </div>
+        <div class="sheet-scroll toc-list" data-pane="toc">${tocList}</div>
+        <div class="sheet-scroll note-list hidden" data-pane="bm">${bmList}</div>
+        <div class="sheet-scroll note-list hidden" data-pane="notes">${noteList}</div>
+      </div>`;
+    this.closeMenu();
+    Sheet.open(modal);
+
+    const setTab = t => {
+      modal.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === t));
+      modal.querySelectorAll('[data-pane]').forEach(x => x.classList.toggle('hidden', x.dataset.pane !== t));
+    };
+    setTab(tab);
+    const list = modal.querySelector('.toc-list'), cur = list.querySelector('.current');
+    if (cur && tab === 'toc') list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.offsetHeight / 2;
+
+    modal.querySelector('.sheet-x').onclick = () => Sheet.close(modal);
+    modal.querySelector('.sheet-tabs').onclick = e => {
+      const t = e.target.closest('[data-tab]');
+      if (!t) return;
+      setTab(t.dataset.tab);
+      if (t.dataset.tab === 'toc' && cur) list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.offsetHeight / 2;
+    };
+    modal.querySelectorAll('[data-pane]').forEach(pane => pane.onclick = e => {
+      const del = e.target.closest('[data-del]');
+      if (del) {
+        const item = del.closest('.li');
+        this.removeAnnot(del.dataset.del);
+        item.animate([{ opacity: 1, height: item.offsetHeight + 'px' }, { opacity: 0, height: '0px', paddingTop: 0, paddingBottom: 0 }],
+          { duration: 220, easing: 'ease-in' }).finished.then(() => item.remove());
+        return;
+      }
+      const a = e.target.closest('[data-ch]');
       if (!a) return;
       e.preventDefault();
-      panel.classList.add('hidden');
-      this.closeMenu();
-      this.goChapter(+a.dataset.i);
-    };
+      if (a.dataset.off !== undefined) this.goTo(+a.dataset.ch, +a.dataset.off, a.dataset.id);
+      else this.goChapter(+a.dataset.ch);
+      Sheet.close(modal);
+    });
   },
 };
 

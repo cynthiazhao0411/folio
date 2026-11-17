@@ -6,15 +6,17 @@
 //   1. Structured HTML exports (a #preface metadata block plus #chapters)
 //   2. Plain HTML (chapters split on <h1>/<h2>/<h3> headings)
 //   3. Plain text (chapter headings detected by pattern; UTF-8 / GBK auto-detected)
+//   4. A saved full-work web page (from the share-sheet shortcut), see parseWorkPage
 
 const Importer = {
   async parse(file) {
-    const buf = await file.arrayBuffer();
-    const text = decodeText(buf);
-    const baseName = file.name.replace(/\.[^.]+$/, '');
-    const book = /\.txt$/i.test(file.name)
-      ? parseTxt(text, baseName)
-      : parseHtml(text, baseName);
+    const text = decodeText(await file.arrayBuffer());
+    return this.parseText(text, file.name.replace(/\.[^.]+$/, ''), /\.txt$/i.test(file.name));
+  },
+
+  // Also used for pasted text: HTML is recognized by its tags, anything else is plain text
+  parseText(text, name, isTxt = !/<html|<body|<div|<p[\s>]/i.test(text.slice(0, 4000))) {
+    const book = isTxt ? parseTxt(text, name) : parseHtml(text, name);
     // Stable id: re-importing the same book replaces it and keeps reading progress
     book.id = 'b-' + hash(book.source || book.title + '|' + book.authors.join(','));
     return book;
@@ -40,7 +42,66 @@ const txt = el => (el ? el.textContent.trim() : '');
 function parseHtml(html, fallbackTitle) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   if (doc.querySelector('#preface') && doc.querySelector('#chapters')) return parseStructured(doc);
+  if (doc.querySelector('dl.work.meta') && doc.querySelector('#chapters')) {
+    const book = parseWorkPage(doc);
+    if (book.chapters.length) return book;
+  }
   return parsePlainHtml(doc, fallbackTitle);
+}
+
+// A full-work web page, as saved by the share-sheet shortcut (which also adds
+// <meta name="folio-source">). Same information as the structured export, laid out differently:
+//   .preface h2.title, h3.byline a[rel=author], .summary blockquote
+//   dl.work.meta: <dt class="relationship">Relationships:</dt><dd>…links…</dd>, and a nested
+//                 dl.stats for Published / Completed / Words / Chapters
+//   #chapters > .chapter: .chapter.preface h3.title, .notes blockquote, .userstuff (text), .end.notes
+//   (single-chapter works put .userstuff straight inside #chapters)
+function parseWorkPage(doc) {
+  const pre = doc.querySelector('.preface.group');
+  const title = txt(pre?.querySelector('h2.title')) || txt(doc.querySelector('title'));
+  const authors = [...(pre?.querySelectorAll('.byline a[rel="author"]') || [])].map(txt);
+  const summary = pre?.querySelector('.summary blockquote')?.innerHTML || '';
+
+  const tags = {};
+  doc.querySelectorAll('dl.work.meta > dt').forEach(dt => {
+    const key = txt(dt).replace(/:$/, ''), dd = dt.nextElementSibling;
+    if (!dd || !key) return;
+    const inner = dd.querySelector('dl');
+    if (inner) {                                    // stats: "Published: … Words: …"
+      tags[key] = [[...inner.querySelectorAll('dt')].map(d => `${txt(d)} ${txt(d.nextElementSibling)}`).join(' ')];
+    } else if (dd.querySelector('.position')) {     // series: just the series names
+      tags[key] = [...dd.querySelectorAll('.position a[href*="/series/"]')].map(txt);
+    } else {
+      const links = [...dd.querySelectorAll('a')].map(txt);
+      tags[key] = links.length ? links : [txt(dd)];
+    }
+  });
+
+  // Same source URL format as the structured export, so both kinds of import update the same book
+  const src = doc.querySelector('meta[name="folio-source"]')?.content || '';
+  const source = src.replace(/(\/\d{4,})[\/?#].*$/, '$1');
+
+  const cleanText = el => { el = el.cloneNode(true); el.querySelectorAll('.landmark').forEach(n => n.remove()); return el.innerHTML; };
+  const chapters = [];
+  const box = doc.querySelector('#chapters');
+  const parts = box.querySelectorAll(':scope > .chapter');
+  if (parts.length) {
+    parts.forEach((ch, i) => {
+      const head = txt(ch.querySelector('.chapter.preface h3.title')).replace(/\s+/g, ' ');
+      const m = head.match(/^Chapter\s+(\d+)(?::\s*(.+))?$/i);
+      const text = ch.querySelector(':scope > .userstuff');
+      chapters.push({
+        title: m ? (m[2] || `第${m[1]}章`) : head || `第${i + 1}章`,
+        notes: ch.querySelector('.chapter.preface .notes:not(.end) blockquote')?.innerHTML || '',
+        html: text ? cleanText(text) : '',
+        endNotes: ch.querySelector('.end.notes blockquote')?.innerHTML || '',
+      });
+    });
+  } else {
+    const text = box.querySelector('.userstuff');
+    if (text) chapters.push({ title, notes: pre?.querySelector('.notes blockquote')?.innerHTML || '', html: cleanText(text), endNotes: '' });
+  }
+  return { title, authors, summary, tags, source, chapters: chapters.filter(c => c.html.trim()) };
 }
 
 // Structured export layout:
