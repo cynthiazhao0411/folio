@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Folio</title>
+  <meta name="robots" content="noindex, nofollow">
+
+  <!-- Standalone (Add to Home Screen) support -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Folio">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f6f1e7">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" href="favicon.png">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Library -->
+  <section id="shelf">
+    <header class="shelf-head">
+      <h1>我的书架</h1>
+      <div class="head-actions">
+        <button id="btn-more" class="icon-btn" aria-label="更多">⋯</button>
+        <label class="import-btn">
+          ＋ 导入
+          <input type="file" id="picker" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
+        </label>
+      </div>
+    </header>
+
+    <!-- More menu: backup / restore -->
+    <div id="more-sheet" class="sheet-modal fixed hidden">
+      <div class="sheet-card">
+        <div class="sheet-grip"></div>
+        <button class="sheet-item" id="btn-backup">备份书架<small>把所有书和进度存成一个文件</small></button>
+        <label class="sheet-item">恢复备份<small>选之前存的备份文件</small>
+          <input type="file" id="restore-picker" accept=".json,application/json" hidden>
+        </label>
+        <button class="sheet-item cancel" id="btn-more-close">取消</button>
+      </div>
+    </div>
+    <p id="shelf-count" class="shelf-count"></p>
+    <div id="grid" class="grid"></div>
+  </section>
+
+  <!-- Reader -->
+  <section id="reader" class="hidden">
+    <!-- Two identical sheets used as a double buffer: the top one is visible,
+         the hidden one is pre-laid-out with the next page. They swap after each turn. -->
+    <div id="stack" class="stack">
+      <div class="view"><div class="view-inner">
+        <div class="running header"></div>
+        <div class="page"><div class="flow"></div></div>
+        <div class="running footer"></div>
+      </div></div>
+      <div class="view"><div class="view-inner">
+        <div class="running header"></div>
+        <div class="page"><div class="flow"></div></div>
+        <div class="running footer"></div>
+      </div></div>
+      <div id="curl-shadow" class="curl-shadow"></div>
+      <div id="curl-back" class="curl-back"></div>
+    </div>
+
+    <div id="topbar" class="bar">
+      <button id="btn-back">‹ 书架</button>
+      <span id="book-title"></span>
+      <span class="bar-spacer"></span>
+    </div>
+    <div id="bottombar" class="bar">
+      <button id="btn-toc"><b>☰</b>目录</button>
+      <button id="btn-smaller"><b>A</b>小</button>
+      <button id="btn-bigger"><b style="font-size:1.3em">A</b>大</button>
+      <button id="btn-theme"><b>◐</b>底色</button>
+      <button id="btn-turn"><b>❏</b><span>仿真</span></button>
+    </div>
+
+    <div id="toc-panel" class="panel hidden"></div>
+    <div id="note-panel" class="sheet-modal hidden"></div>
+  </section>
+
+  <script src="db.js"></script>
+  <script src="importer.js"></script>
+  <script src="reader.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
