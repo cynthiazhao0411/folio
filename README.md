@@ -1,63 +1,81 @@
 # Folio
 
-一个为手机设计的轻量电子书阅读器。纯前端实现，无需服务器、无需安装，添加到主屏幕即可像原生 App 一样使用，所有书籍与阅读数据只保存在本机。
+A lightweight, mobile-first e-book reader built as a Progressive Web App. No backend, no install, no build step. Add it to your home screen and it behaves like a native app, while every book and every reading record stays on your device.
 
-A lightweight, mobile-first e-book reader built as a Progressive Web App. No backend, no build step — books and reading data never leave the device.
+**Live:** https://cynthiazhao0411.github.io/folio/
 
-## 功能 Features
+## Features
 
-- **多格式导入**：结构化 HTML、普通 HTML（按标题自动分章）、TXT（自动分章，自动识别 UTF-8 / GBK 编码）
-- **分页阅读**：基于 CSS 多栏的分页排版，支持点击、滑动翻页
-- **仿真翻页**：手指拖动时纸张跟随，带纸背与折线阴影；全部使用 GPU 合成的 transform 动画
-- **书签与笔记**：长按选择文字，可四色高亮、写批注（自动高亮）、复制；页面书签；目录面板中统一查看并一键跳转
-- **书签手势**：下拉页面添加 / 移除书签，点书签角标直接取消
-- **阅读统计**：日 / 周 / 月 / 年 / 总时长、环比、阅读天数、连续天数、读得最多；90 秒无操作或切到后台即停止计时，防止挂机虚增
-- **读完次数**：进度超过 85% 且本轮阅读时长达到“字数 ÷ 阅读速度”预估时长的 40% 才计为读完一遍，长短篇自动适配
-- **书架**：自动生成封面（也可从相册上传并裁剪）、封面页与作品信息页、阅读进度、同书重新导入保留进度
-- **书架管理**：长按（电脑右键）弹出菜单——重命名、移动到文件夹、标签、置顶、评分、封面、分享为 EPUB、单本阅读统计、阅读状态、隐藏、删除；多选模式批量操作；按文件夹 / 标签筛选
-- **流畅动效**：开书 / 合书的封面翻转动画，底部面板可拖动关闭
-- **阅读设置**：字号、三种底色（米白 / 护眼绿 / 夜间）、翻页方式，自动记忆
-- **离线可用**：Service Worker 缓存，无网络也能打开
-- **备份与恢复**：一键导出全部书籍和进度为 JSON 文件
+### Reading
+- **Paginated layout**: CSS multi-column pagination with tap and swipe to turn pages.
+- **Page curl**: the page follows your finger, with a paper back and a fold shadow. Every frame is a GPU-composited `transform`.
+- **Front pages**: each book opens on a cover page (jacket, title, characters, tags, summary), followed by a full-bleed info page with word count, chapter count and date.
+- **Reading settings**: font size, three paper themes (cream, green, night) and page-turn style, all remembered.
 
-## 技术实现 Technical notes
+### Highlights, notes and bookmarks
+- **Character-precise selection**: long-press (or click and drag on desktop) to select, with drag handles, a live character count and a floating menu at the end of the selection.
+- **Highlights and notes**: four highlight colours and notes with timestamps. Writing a note on plain text highlights it automatically. Tap any highlight to change its colour, copy it, edit it or delete it.
+- **Bookmarks**: pull the page down to add or remove one, or tap the ribbon to remove it.
+- **One panel for everything**: contents, bookmarks and notes live in a single slide-up panel, and each entry jumps straight to its place.
 
-| 模块 | 说明 |
+### Library
+- **Covers**: generated automatically, or upload your own photo and crop it in a fixed 2:3 frame (drag, pinch or scroll to zoom).
+- **Catalog card**: long-press a book (right-click on desktop) to open its card. From there you can rate, set a status (unread / reading / finished), rename, move to a folder, edit tags, pin, change the cover, export as EPUB, view its stats, hide it or delete it.
+- **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete.
+- **Organisation**: folders, tags (with suggestions taken from the book's own metadata), pinned books first, hidden books, and filter chips.
+- **Re-import keeps everything**: importing the same book again updates the text and keeps your progress, notes, rating and history.
+
+### Reading stats
+- **Honest timer**: the clock stops after 90 seconds without input and stops immediately when the app goes to the background.
+- **Views**: day, week, month, year and all-time, with comparison to the previous period, reading days, streaks and most-read books.
+- **Read-throughs**: a book counts as read once progress passes 85% *and* this run's reading time reaches 40% of the estimated time (word count ÷ reading speed), so it adapts to both short and long books. The first time you mark a book finished by hand also counts once.
+- **Ratings**: you're asked to rate a book when you finish it (only if it hasn't been rated yet). The library view shows your average rating and its 5-to-1 distribution.
+
+### Import and export
+- **Formats**: structured HTML, saved web pages, plain HTML (split into chapters by headings), and TXT (chapter detection; UTF-8 and GBK encodings detected automatically).
+- **Paste import**: paste a book's HTML from the clipboard.
+- **EPUB export**: share any book as an EPUB 3 file.
+- **Backup and restore**: export all books, progress, notes and daily records to a single JSON file.
+- **Offline**: a service worker caches the app, so it opens without a network.
+
+## Technical notes
+
+| Module | Description |
 |---|---|
-| `importer.js` | 文件解析：DOMParser 解析 HTML 结构；TextDecoder 识别编码；正则识别 TXT 章节 |
-| `reader.js` | 排版与翻页：一次排一章，CSS `column-width` 切页，`translate3d` 定位；双缓冲 “两张纸” 轮换实现仿真翻页，空闲时预排下一章 |
-| `annotations.js` | 书签、高亮、批注：以章节纯文本字符偏移定位（排版变化不影响），重新导入时按引文自动重新定位；自定义长按选择与浮动菜单 |
-| `stats.js` | 阅读计时（闲置判定、后台暂停）、读完判定、统计页（纯 HTML/CSS 柱状图） |
-| `cover.js` | 自定义封面：固定 2:3 取景框，拖动 / 双指 / 滚轮缩放，Canvas 裁切并提取主色 |
-| `library.js` | 书架：排序筛选、长按菜单（二级菜单）、多选模式与工具栏、iOS 风格对话框与选择器 |
-| `epub.js` | 导出 EPUB 3：XHTML 规范化 + 极简 ZIP 写入（store 模式 + CRC-32） |
-| `ui.js` | Web Animations API 动效：底部面板、开书 / 合书转场 |
-| `db.js` | IndexedDB 封装，书籍信息与正文分表存储，书架页只读轻量元数据 |
-| `app.js` | 书架、导入、设置、进度保存（防抖写入）、备份恢复 |
-| `sw.js` | 网络优先 + 缓存兜底的离线策略，发布更新后重开即生效 |
+| `importer.js` | Parsing: DOMParser for HTML structure, TextDecoder with GB18030 fallback, regex-based TXT chapter detection, stable IDs from a hash of source or title and authors |
+| `reader.js` | Layout and turning: one chapter at a time, `column-width` pagination, `translate3d` positioning; two-sheet double buffer for the curl, next chapter pre-laid-out while idle |
+| `annotations.js` | Bookmarks, highlights and notes anchored by character offsets in each chapter's plain text (independent of layout) and re-located by quoted text after re-import; custom selection with cached glyph boxes and arithmetic hit-testing |
+| `stats.js` | Reading clock (idle and background detection), read-through rule, stats page with pure HTML/CSS charts and rating distribution |
+| `cover.js` | Cover cropper: fixed 2:3 frame, drag / pinch / wheel zoom, Canvas export and dominant-colour extraction |
+| `library.js` | Library: filtering, catalog card, pickers, multi-select toolbar, custom dialogs |
+| `epub.js` | EPUB 3 export: XHTML normalisation plus a minimal ZIP writer (store mode, CRC-32) |
+| `ui.js` | Web Animations API motion: draggable bottom sheets, book open/close transitions, title fitting |
+| `db.js` | IndexedDB wrapper; book metadata and text in separate stores so the library only loads light records |
+| `app.js` | App shell: import, settings, debounced progress saving, backup and restore |
+| `sw.js` | Network-first with cache fallback; a new release takes effect on the next launch |
 
-纯 HTML / CSS / JavaScript，无框架、无依赖、无构建步骤。
+Plain HTML, CSS and JavaScript: no framework, no dependencies, no build step.
 
-## 本地运行 Run locally
+## Run locally
 
 ```bash
 python -m http.server 8000
 ```
 
-浏览器打开 `http://localhost:8000`。手机与电脑在同一网络时，可用电脑的局域网 IP 访问。
+Open `http://localhost:8000`. If your phone is on the same network, use your computer's LAN IP instead.
 
-## 部署 Deploy
+## Deploy
 
-推送到 GitHub 后在仓库 Settings → Pages 选择 `main` 分支根目录即可。
+Push to GitHub, then in the repository go to **Settings → Pages** and serve the `main` branch from the root.
 
-## 从网页快速导入（iPhone 快捷指令）
+## Quick import from a web page (iPhone Shortcut)
 
-主屏幕网页应用无法直接接收网页链接，可以用快捷指令把作品复制到剪贴板，再在 Folio 里一键粘贴：
+A home-screen web app can't receive links from other apps directly, so this Shortcut copies a book to the clipboard and you paste it into Folio:
 
-1. 打开「快捷指令」，新建快捷指令，命名为「存入 Folio」。
-2. 在快捷指令设置里打开「在共享表单中显示」，接收类型选「URL」。
-3. 添加动作「获取 URL 的内容」，输入选「快捷指令输入」。
-4. 添加动作「拷贝到剪贴板」。
-5. 添加动作「显示通知」，内容写「已复制，打开 Folio 粘贴」。
+1. Open **Shortcuts**, create a new shortcut and name it "Save to Folio".
+2. In its details, turn on **Show in Share Sheet** and set the input type to **URLs**.
+3. Add **Get Contents of URL** with **Shortcut Input** as the input.
+4. Add **Copy to Clipboard**.
+5. Add **Show Notification** with the text "Copied, open Folio to paste".
 
-使用：长按网页上的 HTML 下载链接 → 分享 → 存入 Folio → 打开 Folio → 导入 → 粘贴剪贴板里的作品。
+To use it: long-press an HTML download link → Share → Save to Folio → open Folio → Import → Paste.
