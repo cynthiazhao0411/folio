@@ -77,25 +77,34 @@ function jacket(b, cls = '') {
     </div>`;
 }
 
-// Phone shelf: size the covers so that exactly three full rows of three fit on the first
-// screen (cover, two-line title, status and progress all visible, nothing cut at the bottom)
+// Phone shelf: three columns, and exactly three full rows on the first screen. The cover
+// size follows the real space left under the header (status bar and notch included);
+// the third row is padded so the fourth starts below the screen's edge.
 function fitShelf() {
   const grid = document.getElementById('grid');
   if (!grid) return;
-  if (innerWidth > 600 || !grid.querySelector('.card')) { grid.style.removeProperty('--cw'); grid.style.removeProperty('--rg'); return; }
+  const props = ['--cw', '--rg', '--cf', '--tail'];
+  if (innerWidth > 600 || !grid.querySelector('.card')) { props.forEach(p => grid.style.removeProperty(p)); return; }
+  props.forEach(p => grid.style.removeProperty(p));
   const shelf = document.getElementById('shelf');
   const top = grid.getBoundingClientRect().top + shelf.scrollTop + scrollY;
-  const bottom = parseFloat(getComputedStyle(shelf).paddingBottom) * .5;
-  const info = grid.querySelector('.card-info').getBoundingClientRect().height + parseFloat(getComputedStyle(grid.querySelector('.card-info')).marginTop);
-  const gap = 16, colGap = 14;
-  const rowH = (innerHeight - top - bottom - gap * 2) / 3;
-  const byHeight = (rowH - info) * 2 / 3;
-  const byWidth = (grid.clientWidth - colGap * 2) / 3;
+  const card = grid.querySelector('.card-info');
+  const info = card.getBoundingClientRect().height + parseFloat(getComputedStyle(card).marginTop);
+  const pill = document.getElementById('shelf-theme').getBoundingClientRect();
+  const reserve = pill.height ? innerHeight - pill.top + 6 : 48;    // keep the paper-colour pill clear of the books
+  const avail = innerHeight - top - reserve;
+  const minGap = 12;
+  const byWidth = (grid.clientWidth - 2 * 18) / 3;     // at least 18px between columns
+  const byHeight = ((avail - 2 * minGap) / 3 - info) * 2 / 3;
   const cw = Math.floor(Math.max(70, Math.min(byWidth, byHeight)));
+  const rowH = cw * 1.5 + info;
+  const rg = Math.max(minGap, Math.min(30, (avail - 3 * rowH) / 2));
   grid.style.setProperty('--cw', cw + 'px');
-  // Spread spare height into the row gap so the third row ends at the bottom edge
-  const used = 3 * ((cw * 3 / 2) + info);
-  grid.style.setProperty('--rg', Math.max(gap, Math.min(40, (innerHeight - top - bottom - used) / 2)) + 'px');
+  grid.style.setProperty('--rg', rg + 'px');
+  grid.style.setProperty('--cf', (cw / 10.5).toFixed(2) + 'px');     // cover lettering scales with the cover
+  // Push the fourth row just past the bottom of the screen
+  const row3End = top + 3 * rowH + 2 * rg;
+  grid.style.setProperty('--tail', Math.max(0, innerHeight - row3End - rg + 2) + 'px');
 }
 addEventListener('resize', () => fitShelf());
 

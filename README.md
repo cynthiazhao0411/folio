@@ -10,7 +10,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Paginated layout**: CSS multi-column pagination with tap and swipe to turn pages.
 - **Page curl**: the page follows your finger, with a paper back and a fold shadow. Every frame is a GPU-composited `transform`.
 - **Front pages**: each book opens on a cover page (jacket, title, characters, tags, summary), followed by a full-bleed info page with word count, chapter count and date.
-- **Navigation**: a chapter scrubber to jump to any page of the current chapter, 上一章 / 下一章 buttons, and jumps to the end of the chapter or of the book. The footer shows the chapter, the page within it and the whole-book percentage.
+- **Navigation**: a chapter scrubber to jump to any page of the current chapter, and 上一章 / 下一章 buttons. The footer shows the chapter, the page within it and the whole-book percentage.
 - **The End**: every book closes on its own final page in the book's colour, always after the latest chapter however often the book is updated.
 - **Author's notes in the text**: chapter notes appear as a quiet inline box; long ones are folded to a few lines and open with a tap.
 - **Traditional → Simplified**: books in traditional characters are detected and shown in simplified characters, with a one-tap switch back to the original. The conversion is character-for-character, so highlights stay anchored.
@@ -25,7 +25,8 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Library
 - **Continue reading**: a card at the top of the shelf reopens the book you were last reading.
-- **Phone layout**: three columns, with covers sized so three full rows fit the first screen.
+- **Phone layout**: three columns, with covers sized to the real space under the status bar so exactly three full rows fit the first screen.
+- **Paper colour on the shelf**: a small pill in the bottom corner switches light / green / night in one tap.
 - **Refresh**: syncs now, collects works waiting in the inbox and redraws the shelf.
 - **Cover colours**: each book keeps its own colour, handed out so the palette stays evenly used.
 - **Covers**: generated automatically, taken from an EPUB, or uploaded from your photos and cropped in a fixed 2:3 frame (drag, pinch or scroll to zoom).

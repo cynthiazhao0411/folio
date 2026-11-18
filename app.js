@@ -6,9 +6,19 @@ const settings = Object.assign({ theme: 0, font: 19, turn: 'curl' },
   JSON.parse(localStorage.getItem('settings') || '{}'));
 const THEMES = ['', 'theme-green', 'theme-night'];
 
+const THEME_NAMES = ['浅色', '护眼', '深色'];
+const THEME_ICONS = [
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>',
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></svg>',
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg>',
+];
 function applySettings() {
   document.body.classList.remove(...THEMES.filter(Boolean));
   if (THEMES[settings.theme]) document.body.classList.add(THEMES[settings.theme]);
+  const tb = document.getElementById('shelf-theme');
+  if (tb) { tb.innerHTML = THEME_ICONS[settings.theme] + `<span>${THEME_NAMES[settings.theme]}</span>`; }
+  const tc = document.querySelector('meta[name="theme-color"]');
+  if (tc && document.getElementById('reader')?.classList.contains('hidden')) tc.content = getComputedStyle(document.body).getPropertyValue('--bg').trim();
   document.documentElement.style.setProperty('--font-size', settings.font + 'px');
   Reader.turnMode = settings.turn;
   document.querySelector('#btn-turn span').textContent = settings.turn === 'curl' ? '仿真' : '平移';
@@ -352,10 +362,16 @@ if (location.hash === '#paste') {
 document.getElementById('btn-back').onclick = closeBook;
 document.getElementById('btn-toc').onclick = () => Reader.showToc();
 document.getElementById('btn-bookmark').onclick = () => Reader.toggleBookmark();
-document.getElementById('btn-theme').onclick = () => {
+// Paper colour: one tap on the shelf (bottom corner) or in the reader's bottom bar
+function nextTheme() {
+  document.body.classList.add('theme-fade');
   settings.theme = (settings.theme + 1) % THEMES.length;
   applySettings();
-};
+  clearTimeout(nextTheme.t);
+  nextTheme.t = setTimeout(() => document.body.classList.remove('theme-fade'), 450);
+}
+document.getElementById('btn-theme').onclick = nextTheme;
+document.getElementById('shelf-theme').onclick = nextTheme;     // the pill's own label shows the new colour
 function setFont(d) {
   settings.font = Math.min(28, Math.max(14, settings.font + d));
   applySettings();

@@ -413,7 +413,6 @@ const Reader = {
 
   closeMenu() {
     this.el.reader.classList.remove('menu-open');
-    document.getElementById('jump-pop')?.classList.add('hidden');
   },
 
   // ================= Chapter scrubber =================
@@ -451,14 +450,6 @@ const Reader = {
     scrub.addEventListener('pointercancel', up);
     document.getElementById('btn-prev-ch').onclick = () => this.stepChapter(-1);
     document.getElementById('btn-next-ch').onclick = () => this.stepChapter(1);
-    const pop = document.getElementById('jump-pop');
-    document.getElementById('btn-jump').onclick = () => pop.classList.toggle('hidden');
-    pop.onclick = e => {
-      const j = e.target.closest('[data-jump]')?.dataset.jump;
-      if (!j) return;
-      pop.classList.add('hidden');
-      this.jumpEnd(j === 'book-end');
-    };
   },
   // Previous / next chapter; after the last chapter comes The End
   stepChapter(d) {
