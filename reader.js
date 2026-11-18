@@ -84,13 +84,26 @@ const Reader = {
       v.titlePage.innerHTML = `<div class="fp fp-cover">${fp.cover}</div><div class="fp fp-info">${fp.info}</div>`;
       fitTitles(v.titlePage);
     }
+    // The End: an extra page after the last chapter, built from the current text every time,
+    // so it is always the very last page however often the book is updated
+    const last = ch === this.book.chapters.length - 1 && this.titlePageHTML;
+    if (last) {
+      if (!v.endPage) {
+        v.endPage = document.createElement('div');
+        v.endPage.className = 'end-page';
+        v.titlePage.after(v.endPage);
+      }
+      v.endPage.innerHTML = this.titlePageHTML(this.book, this.wordCount).end;
+    }
+    v.hasEnd = !!last;
     const T = s => this.t2s ? toSimplified(s) : s;
     v.flow.innerHTML =
       (front ? '<div class="cover-spacer"></div><div class="cover-spacer"></div>' : '') +
       `<h2 class="ch-title">${T(c.title)}</h2>` +
       this.authorNote(ch, 'start', T(c.notes)) +
       `<div class="ch-body">${T(clean(c.html))}</div>` +
-      this.authorNote(ch, 'end', T(c.endNotes));
+      this.authorNote(ch, 'end', T(c.endNotes)) +
+      (last ? '<div class="end-spacer"></div>' : '');
     this.decorate(v, ch);                                   // highlights (annotations.js)
     v.pages = Math.max(1, Math.round((v.flow.scrollWidth + pad * 2) / W));
     v.ch = ch; v.layout = this.layoutId;
@@ -134,11 +147,21 @@ const Reader = {
     v.footer.innerHTML = `<span>第 ${ch + 1} 章 · ${page + 1} / ${pages}</span><span>全书 ${pct < 1 ? pct.toFixed(1) : Math.floor(pct)}%</span>`;
     v.el.classList.toggle('on-front', this.isCover(ch, page));
     v.el.classList.toggle('on-info', this.isCover(ch, page) && page === 1);
+    v.el.classList.toggle('on-end', this.isEnd(v, ch, page));
     this.updateRibbon(v, ch, page);
     return { ch, page, pages, pct };
   },
 
   isCover(ch, page) { return ch === 0 && page < 2 && !!this.titlePageHTML; },   // cover or info page
+  isEnd(v, ch, page) { return !!v?.hasEnd && ch === this.book.chapters.length - 1 && page === v.pages - 1; },
+  // Pages that are not text: no bookmarks, no selection
+  isSpecial(ch, page) { return this.isCover(ch, page) || this.isEnd(this.views[this.top], ch, page); },
+  // The range of text pages in a chapter (front pages and The End excluded)
+  textRange(v, ch) {
+    const first = ch === 0 && this.titlePageHTML ? 2 : 0;
+    const last = v.pages - 1 - (v.hasEnd ? 1 : 0);
+    return [Math.min(first, last), Math.max(first, last)];
+  },
 
   // Record the current position and notify app.js
   commit(s) {
@@ -147,12 +170,14 @@ const Reader = {
     // Standalone mode: tint the status bar to match the full-bleed info page
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) {
-      const ip = s.ch === 0 && s.page === 1 && this.views[this.top].titlePage.querySelector('.ip');
+      const top = this.views[this.top];
+      const ip = s.ch === 0 && s.page === 1 ? top.titlePage.querySelector('.ip')
+               : this.isEnd(top, s.ch, s.page) ? top.endPage?.querySelector('.ip') : null;
       meta.content = ip ? getComputedStyle(ip).getPropertyValue('--c').trim()
                         : getComputedStyle(document.body).getPropertyValue('--bg').trim();
     }
     this.onProgress?.({ ch: s.ch, frac: s.page / s.pages, pct: s.pct });
-    this.updateScrub(s.pct);
+    this.updateScrub();
     // While idle, pre-layout the chapter the next turn is likely to need on the hidden sheet
     clearTimeout(this._pre);
     this._pre = setTimeout(() => {
@@ -325,7 +350,7 @@ const Reader = {
         if (this.sel) { moved = true; return this.clearSel(); }   // swiping dismisses a selection
         if (Math.abs(dx) < Math.abs(dy)) {
           // Pulling the page down adds (or removes) a bookmark
-          if (dy > 0 && !this.busy && !this.isCover(this.ch, this.page)) {
+          if (dy > 0 && !this.busy && !this.isSpecial(this.ch, this.page)) {
             moved = pulling = true;
             this.closeMenu();
             this.pullStart();
@@ -391,23 +416,21 @@ const Reader = {
     document.getElementById('jump-pop')?.classList.add('hidden');
   },
 
-  // ================= Whole-book scrubber =================
-  // Position is measured the same way as the progress percentage: by chapter text length.
+  // ================= Chapter scrubber =================
+  // The bar covers the current chapter only: drag to any page of it. Chapters are changed
+  // with the 上一章 / 下一章 buttons; pages still turn with taps and swipes.
   bindScrub() {
     const scrub = document.getElementById('scrub'), tip = scrub.querySelector('.scrub-tip');
     const at = x => { const r = scrub.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
-    const locate = f => {
-      const pos = f * this.total;
-      let ch = this.offsets.findIndex((o, i) => pos < o + this.book.chapters[i].html.length);
-      if (ch < 0) ch = this.book.chapters.length - 1;
-      return { ch, frac: Math.max(0, Math.min(1, (pos - this.offsets[ch]) / (this.book.chapters[ch].html.length || 1))) };
+    const pageAt = f => {
+      const [a, b] = this.textRange(this.views[this.top], this.ch);
+      return a + Math.round(f * (b - a));
     };
     let dragging = false;
     const move = x => {
-      const f = at(x), { ch } = locate(f);
-      this.drawScrub(f * 100);
-      const t = this.book.chapters[ch].title;
-      tip.textContent = `${this.t2s ? toSimplified(t) : t} · ${Math.round(f * 100)}%`;
+      const f = at(x), [a, b] = this.textRange(this.views[this.top], this.ch), p = pageAt(f);
+      this.drawScrub(b > a ? (p - a) / (b - a) * 100 : 100);
+      tip.textContent = `第 ${p - a + 1} / ${b - a + 1} 页`;
       tip.style.left = (f * 100) + '%';
     };
     scrub.addEventListener('pointerdown', e => {
@@ -421,16 +444,13 @@ const Reader = {
       if (!dragging) return;
       dragging = false;
       scrub.classList.remove('dragging');
-      const { ch, frac } = locate(at(e.clientX));
       if (this.sel) this.clearSel();
-      const v = this.views[this.top], pages = this.ensure(v, ch);
-      const first = ch === 0 && this.titlePageHTML && frac > 0 ? 2 : 0;
-      this.commit(this.show(v, ch, Math.max(first, Math.min(pages - 1, Math.floor(frac * pages)))));
+      this.commit(this.show(this.views[this.top], this.ch, pageAt(at(e.clientX))));
     };
     scrub.addEventListener('pointerup', up);
     scrub.addEventListener('pointercancel', up);
-    document.getElementById('btn-prev').onclick = () => this.prev();
-    document.getElementById('btn-next').onclick = () => this.next();
+    document.getElementById('btn-prev-ch').onclick = () => this.stepChapter(-1);
+    document.getElementById('btn-next-ch').onclick = () => this.stepChapter(1);
     const pop = document.getElementById('jump-pop');
     document.getElementById('btn-jump').onclick = () => pop.classList.toggle('hidden');
     pop.onclick = e => {
@@ -440,26 +460,36 @@ const Reader = {
       this.jumpEnd(j === 'book-end');
     };
   },
-  drawScrub(pct) {
-    const scrub = document.getElementById('scrub');
-    scrub.style.setProperty('--p', Math.max(0, Math.min(100, pct)) + '%');
+  // Previous / next chapter; after the last chapter comes The End
+  stepChapter(d) {
+    if (this.sel) this.clearSel();
+    const n = this.book.chapters.length, ch = this.ch + d;
+    if (ch < 0) return toast('已经是第一章');
+    if (ch >= n) {
+      const v = this.views[this.top];
+      if (this.isEnd(v, this.ch, this.page)) return toast('已经是最后一页');
+      return this.commit(this.show(v, this.ch, 'last'));
+    }
+    this.goChapter(ch);
   },
-  updateScrub(pct) {
+  drawScrub(pct) {
+    document.getElementById('scrub')?.style.setProperty('--p', Math.max(0, Math.min(100, pct)) + '%');
+  },
+  updateScrub() {
     const scrub = document.getElementById('scrub');
     if (!scrub || scrub.classList.contains('dragging')) return;
-    if (scrub.dataset.book !== this.book.id) {          // chapter ticks, drawn once per book
-      scrub.dataset.book = this.book.id;
-      const n = this.book.chapters.length;
-      scrub.querySelector('.scrub-ticks').innerHTML = n > 1 && n <= 200
-        ? this.offsets.slice(1).map(o => `<i style="left:${o / this.total * 100}%"></i>`).join('') : '';
-    }
-    this.drawScrub(pct);
+    const [a, b] = this.textRange(this.views[this.top], this.ch);
+    this.drawScrub(b > a ? (Math.min(Math.max(this.page, a), b) - a) / (b - a) * 100 : 100);
+    document.getElementById('btn-prev-ch').disabled = this.ch === 0;
+    document.getElementById('btn-next-ch').disabled = this.isEnd(this.views[this.top], this.ch, this.page);
   },
-  // Last page of this chapter, or of the whole book
+  // Last text page of this chapter, or The End of the book
   jumpEnd(book) {
     if (this.sel) this.clearSel();
-    const ch = book ? this.book.chapters.length - 1 : this.ch;
-    this.commit(this.show(this.views[this.top], ch, 'last'));
+    const v = this.views[this.top];
+    if (book) return this.commit(this.show(v, this.book.chapters.length - 1, 'last'));
+    this.ensure(v, this.ch);
+    this.commit(this.show(v, this.ch, this.textRange(v, this.ch)[1]));
   },
 
   // Traditional → Simplified display (lib/t2s.js); the stored text never changes

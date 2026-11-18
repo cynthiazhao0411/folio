@@ -13,6 +13,26 @@ function coverColor(key) {
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return COVER_COLORS[h % COVER_COLORS.length];
 }
+// Each book keeps its own colour (m.palette: an index into COVER_COLORS), stored with the
+// book so it never changes on its own. Colours are handed out to keep them evenly used:
+// the first time, the whole shelf is shuffled evenly; after that, a new book gets one of
+// the least-used colours.
+function bookColor(b) { return Number.isInteger(b.palette) ? COVER_COLORS[b.palette % COVER_COLORS.length] : coverColor(b.id || b.title); }
+async function balancePalettes() {
+  const all = await DB.allMeta();
+  const missing = all.filter(m => !Number.isInteger(m.palette));
+  if (!missing.length) return;
+  const counts = COVER_COLORS.map(() => 0);
+  all.forEach(m => { if (Number.isInteger(m.palette)) counts[m.palette % counts.length]++; });
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  for (const m of shuffle(missing)) {
+    const min = Math.min(...counts);
+    const choices = counts.map((n, i) => n === min ? i : -1).filter(i => i >= 0);
+    m.palette = choices[Math.floor(Math.random() * choices.length)];
+    counts[m.palette]++;
+    await DB.putMeta(m);
+  }
+}
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // The book's own metadata, matched loosely by name
@@ -46,7 +66,7 @@ function wordBreaks(text) {
 function jacket(b, cls = '') {
   if (b.cover) return `<div class="cover has-img ${cls}" style="background:${b.coverColor || '#555'} url(${b.cover}) center / cover no-repeat"></div>`;
   const sub = coverSubtitle(b), t = splitTitle(b.title);
-  return `<div class="cover ${cls}" style="background:${coverColor(sub || b.title)}">
+  return `<div class="cover ${cls}" style="background:${bookColor(b)}">
       <div class="c-mid">
         ${t.pre ? `<div class="c-pre">${esc(t.pre)}</div>` : ''}
         <div class="c-title">${wordBreaks(t.main)}</div>
@@ -56,6 +76,28 @@ function jacket(b, cls = '') {
       ${b.authors?.length ? `<div class="c-author">${esc(b.authors.join('、'))}</div>` : ''}
     </div>`;
 }
+
+// Phone shelf: size the covers so that exactly three full rows of three fit on the first
+// screen (cover, two-line title, status and progress all visible, nothing cut at the bottom)
+function fitShelf() {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  if (innerWidth > 600 || !grid.querySelector('.card')) { grid.style.removeProperty('--cw'); grid.style.removeProperty('--rg'); return; }
+  const shelf = document.getElementById('shelf');
+  const top = grid.getBoundingClientRect().top + shelf.scrollTop + scrollY;
+  const bottom = parseFloat(getComputedStyle(shelf).paddingBottom) * .5;
+  const info = grid.querySelector('.card-info').getBoundingClientRect().height + parseFloat(getComputedStyle(grid.querySelector('.card-info')).marginTop);
+  const gap = 16, colGap = 14;
+  const rowH = (innerHeight - top - bottom - gap * 2) / 3;
+  const byHeight = (rowH - info) * 2 / 3;
+  const byWidth = (grid.clientWidth - colGap * 2) / 3;
+  const cw = Math.floor(Math.max(70, Math.min(byWidth, byHeight)));
+  grid.style.setProperty('--cw', cw + 'px');
+  // Spread spare height into the row gap so the third row ends at the bottom edge
+  const used = 3 * ((cw * 3 / 2) + info);
+  grid.style.setProperty('--rg', Math.max(gap, Math.min(40, (innerHeight - top - bottom - used) / 2)) + 'px');
+}
+addEventListener('resize', () => fitShelf());
 
 // Reading status: set by hand, or inferred from progress and finished read-throughs
 function statusOf(b) {
@@ -243,6 +285,7 @@ const Library = {
 
   // ---------- rendering ----------
   async render() {
+    await balancePalettes();                 // books without a colour yet get one (saved with the book)
     this.books = await DB.allMeta();
     const folders = this.folders(), tags = this.tags();
     if (this.filter !== 'all' && !(this.filter.startsWith('f:') ? folders.includes(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';
@@ -280,6 +323,7 @@ const Library = {
     }
 
     const grid = document.getElementById('grid');
+    requestAnimationFrame(() => fitShelf());
     if (!this.books.length || (!list.length && this.filter === 'all' && !this.showHidden)) {
       grid.innerHTML = `
         <div class="empty">

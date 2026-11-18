@@ -23,6 +23,22 @@ applySettings();
 // The shelf itself lives in library.js
 const renderShelf = () => Library.render();
 Library.bind();
+// Refresh: sync now (and collect works waiting in the inbox), then redraw the shelf
+document.getElementById('btn-refresh').onclick = async e => {
+  const btn = e.currentTarget;
+  if (btn.classList.contains('spinning')) return;
+  btn.classList.add('spinning');
+  const before = JSON.stringify((await DB.allMeta()).map(m => [m.id, m.chapterCount, m.lastReadAt]));
+  try {
+    if (Sync.on) await Sync.check(true);
+    await renderShelf();
+    const after = JSON.stringify((await DB.allMeta()).map(m => [m.id, m.chapterCount, m.lastReadAt]));
+    toast(Sync.on && Sync.st.error ? '同步失败：' + Sync.st.error
+      : before !== after ? '书架已更新' : Sync.on ? '已是最新 · 刚刚同步' : '已是最新（未开启设备同步）');
+  } finally {
+    setTimeout(() => btn.classList.remove('spinning'), 400);
+  }
+};
 document.getElementById('continue').onclick = e => {
   const id = e.currentTarget.dataset.id;
   if (id) openBook(id, e.currentTarget.querySelector('.cover'));
@@ -215,13 +231,19 @@ function titlePageHTML(b, wordCount) {
     date ? [date.replace(/-/g, '.'), dateLabel] : null,
   ].filter(Boolean);
   const info = `
-    <div class="ip" style="--c:${b.coverColor || coverColor(sub || b.title)}">
+    <div class="ip" style="--c:${b.coverColor || bookColor(b)}">
       <div class="ip-figures">
         ${figures.map(([v, l]) => `<div class="ip-fig"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('<div class="ip-dot"></div>')}
       </div>
       <button class="ip-start">翻开，开始故事<i>→</i></button>
     </div>`;
-  return { cover, info };
+  // ---- after the last chapter: The End ----
+  const end = `
+    <div class="ip ep" style="--c:${b.coverColor || bookColor(b)}">
+      <div class="ep-mid"><div class="ep-end">The End</div><div class="ep-rule"></div><div class="ep-zh">全文完</div></div>
+      <div class="ep-mark">Folio</div>
+    </div>`;
+  return { cover, info, end };
 }
 Reader.titlePageHTML = titlePageHTML;
 
@@ -250,7 +272,7 @@ async function importBooks(sources, open = true) {        // sources: [{ book, l
     const { chapters, ...info } = book;
     // Re-importing a book keeps everything you did with it on the shelf
     const keep = {};
-    for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed'])
+    for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
       if (old?.[k] !== undefined) keep[k] = old[k];
     for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
       if (old?.[k] !== undefined) keep[k] = old[k];

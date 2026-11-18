@@ -10,7 +10,8 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Paginated layout**: CSS multi-column pagination with tap and swipe to turn pages.
 - **Page curl**: the page follows your finger, with a paper back and a fold shadow. Every frame is a GPU-composited `transform`.
 - **Front pages**: each book opens on a cover page (jacket, title, characters, tags, summary), followed by a full-bleed info page with word count, chapter count and date.
-- **Navigation**: a whole-book scrubber with chapter ticks and a live "chapter · %" bubble, previous / next page buttons, and jumps to the end of the chapter or of the book. The footer shows the chapter, the page within it and the whole-book percentage.
+- **Navigation**: a chapter scrubber to jump to any page of the current chapter, 上一章 / 下一章 buttons, and jumps to the end of the chapter or of the book. The footer shows the chapter, the page within it and the whole-book percentage.
+- **The End**: every book closes on its own final page in the book's colour, always after the latest chapter however often the book is updated.
 - **Author's notes in the text**: chapter notes appear as a quiet inline box; long ones are folded to a few lines and open with a tap.
 - **Traditional → Simplified**: books in traditional characters are detected and shown in simplified characters, with a one-tap switch back to the original. The conversion is character-for-character, so highlights stay anchored.
 - **Screen stays on** while you read, and is released after 90 seconds without a touch.
@@ -24,6 +25,9 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Library
 - **Continue reading**: a card at the top of the shelf reopens the book you were last reading.
+- **Phone layout**: three columns, with covers sized so three full rows fit the first screen.
+- **Refresh**: syncs now, collects works waiting in the inbox and redraws the shelf.
+- **Cover colours**: each book keeps its own colour, handed out so the palette stays evenly used.
 - **Covers**: generated automatically, taken from an EPUB, or uploaded from your photos and cropped in a fixed 2:3 frame (drag, pinch or scroll to zoom).
 - **Catalog card**: long-press a book (right-click on desktop) to open its card. From there you can rate, set a status (unread / reading / finished), rename, move to a folder, edit tags, pin, change the cover, export as EPUB, view its stats, hide it or delete it.
 - **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete.
@@ -46,7 +50,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Sync and web collection
 - **Phone ↔ computer sync**: connect a GitHub personal access token with gist access on each device. The whole library is stored in your own secret gists; the device that changed last wins, so nothing is ever half-merged. Book text is uploaded only when it changes, and a book that is open is never replaced under you.
-- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. If a site blocks the connection, the bookmark copies the works to the clipboard instead.
+- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. Batches are saved after every work, so if the page is reloaded, tapping the bookmark again continues with only the works that are left; the screen is kept awake while a batch runs. If a site blocks the connection, the bookmark copies the works to the clipboard instead.
 
 ## Technical notes
 

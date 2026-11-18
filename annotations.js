@@ -158,13 +158,13 @@ Object.assign(Reader, {
     return this.annots.filter(a => a.type === 'bookmark' && a.ch === ch && this.pageOf(v, a.start) === page);
   },
   updateRibbon(v, ch, page) {
-    v.el.classList.toggle('bookmarked', !this.isCover(ch, page) && this.pageHasBookmark(v, ch, page).length > 0);
+    v.el.classList.toggle('bookmarked', !this.isCover(ch, page) && !this.isEnd(v, ch, page) && this.pageHasBookmark(v, ch, page).length > 0);
   },
   syncBookmarkBtn() {
     this.el.btnBookmark?.classList.toggle('on', this.views[this.top].el.classList.contains('bookmarked'));
   },
   toggleBookmark(quiet) {
-    if (this.isCover(this.ch, this.page)) return toast('封面和作品信息页不能加书签');
+    if (this.isSpecial(this.ch, this.page)) return toast('封面、信息页和最后一页不能加书签');
     const v = this.views[this.top];
     const existing = this.pageHasBookmark(v, this.ch, this.page);
     if (existing.length) {

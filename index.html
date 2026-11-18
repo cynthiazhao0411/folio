@@ -16,7 +16,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" href="favicon.png">
 
-  <link rel="stylesheet" href="style.css?v=1.2.0">
+  <link rel="stylesheet" href="style.css?v=1.2.1">
 </head>
 <body>
 
@@ -25,6 +25,9 @@
     <header class="shelf-head">
       <h1>我的书架</h1>
       <div class="head-actions">
+        <button id="btn-refresh" class="icon-btn" aria-label="刷新书架">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3.5V8h4.5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20.5V16h-4.5"/></svg>
+        </button>
         <button id="btn-stats" class="icon-btn" aria-label="阅读统计">
           <svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 20V11M12 20V5M19 20v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
@@ -78,7 +81,7 @@
           <input type="file" id="restore-picker" accept=".json,application/json" hidden>
         </label>
         <button class="sheet-item cancel" id="btn-more-close">取消</button>
-        <div class="app-version">Folio v1.2.0</div>
+        <div class="app-version">Folio v1.2.1</div>
       </div>
     </div>
     <div class="shelf-sub">
@@ -126,13 +129,13 @@
     </div>
     <div id="bottombar" class="bar">
       <div class="nav-row">
-        <button id="btn-prev" class="nav-btn" aria-label="上一页">‹</button>
+        <button id="btn-prev-ch" class="ch-btn">上一章</button>
         <div id="scrub" class="scrub">
-          <div class="scrub-track"><i class="scrub-fill"></i><div class="scrub-ticks"></div></div>
+          <div class="scrub-track"><i class="scrub-fill"></i></div>
           <div class="scrub-knob"></div>
           <div class="scrub-tip"></div>
         </div>
-        <button id="btn-next" class="nav-btn" aria-label="下一页">›</button>
+        <button id="btn-next-ch" class="ch-btn">下一章</button>
         <button id="btn-jump" class="nav-btn jump" aria-label="跳转">⤓</button>
         <div id="jump-pop" class="jump-pop hidden">
           <button data-jump="ch-end">本章末尾</button>
@@ -156,18 +159,18 @@
     <div id="note-panel" class="sheet-modal hidden"></div>
   </section>
 
-  <script src="ui.js?v=1.2.0"></script>
-  <script src="lib/t2s.js?v=1.2.0"></script>
-  <script src="db.js?v=1.2.0"></script>
-  <script src="importer.js?v=1.2.0"></script>
-  <script src="formats.js?v=1.2.0"></script>
-  <script src="reader.js?v=1.2.0"></script>
-  <script src="annotations.js?v=1.2.0"></script>
-  <script src="stats.js?v=1.2.0"></script>
-  <script src="cover.js?v=1.2.0"></script>
-  <script src="epub.js?v=1.2.0"></script>
-  <script src="library.js?v=1.2.0"></script>
-  <script src="sync.js?v=1.2.0"></script>
-  <script src="app.js?v=1.2.0"></script>
+  <script src="ui.js?v=1.2.1"></script>
+  <script src="lib/t2s.js?v=1.2.1"></script>
+  <script src="db.js?v=1.2.1"></script>
+  <script src="importer.js?v=1.2.1"></script>
+  <script src="formats.js?v=1.2.1"></script>
+  <script src="reader.js?v=1.2.1"></script>
+  <script src="annotations.js?v=1.2.1"></script>
+  <script src="stats.js?v=1.2.1"></script>
+  <script src="cover.js?v=1.2.1"></script>
+  <script src="epub.js?v=1.2.1"></script>
+  <script src="library.js?v=1.2.1"></script>
+  <script src="sync.js?v=1.2.1"></script>
+  <script src="app.js?v=1.2.1"></script>
 </body>
 </html>

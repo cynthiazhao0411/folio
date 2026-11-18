@@ -10,6 +10,11 @@
 // Works travel through your own secret inbox gist; Folio collects them when it opens.
 // If the site does not let the page talk to GitHub, the works are copied to the
 // clipboard instead, to paste into Folio.
+//
+// Batches survive interruptions: the list of works and which ones are already delivered
+// are saved in this site's local storage after every work. If the phone reloads the page
+// (iOS does this to background tabs), tapping the bookmark again offers to continue with
+// only the works that are left. The screen is kept awake while a batch runs.
 (async () => {
   const CFG = { token: '__TOKEN__', inbox: '__INBOX__' };
   const API = 'https://api.github.com/gists/' + CFG.inbox;
@@ -95,6 +100,20 @@
   }
 
   // ---------- inbox ----------
+  // ---------- the saved batch ----------
+  const JOB = 'folio-collect-job';
+  const loadJob = () => { try { return JSON.parse(localStorage.getItem(JOB)); } catch { return null; } };
+  const saveJob = j => { try { j ? localStorage.setItem(JOB, JSON.stringify(j)) : localStorage.removeItem(JOB); } catch { /* storage full or blocked */ } };
+  let lock = null;
+  const keepAwake = async on => {
+    try {
+      if (on && !lock && navigator.wakeLock) { lock = await navigator.wakeLock.request('screen'); lock.onrelease = () => { lock = null; }; }
+      if (!on && lock) { await lock.release(); lock = null; }
+    } catch { lock = null; }
+  };
+  // The lock is dropped whenever the page is hidden; take it again on return
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && loadJob()) keepAwake(true); });
+
   let blocked = false;
   const held = [];                                   // works kept for the clipboard when GitHub is unreachable
   async function api(method, body) {
@@ -106,17 +125,19 @@
     if (!r.ok) throw new Error('收件箱出错 ' + r.status);
     return r.json();
   }
+  // Returns true when the work reached the inbox, false when it is held for the clipboard
   async function deliver(w) {
     if (!blocked) {
       try {
-        await api('PATCH', { files: { [`in-${w.id}-${Date.now()}.html`]: { content: w.html } } });
-        return;
+        await api('PATCH', { files: { [`in-${w.id}.html`]: { content: w.html } } });   // one file per work: never twice
+        return true;
       } catch (e) {
         if (!(e instanceof TypeError)) throw e;      // TypeError = the request never left the page
         blocked = true;
       }
     }
-    held.push({ html: w.html });
+    held.push({ id: w.id, html: w.html });
+    return false;
   }
   let shelf = null;
   async function readShelf() {
@@ -137,7 +158,9 @@
     if (held.length) {
       say(`已抓好 ${held.length} 篇。这个网站不让页面直接连到 GitHub，\n点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
       buttons([['复制', async () => {
-        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held }));
+        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => ({ html: h.html })) }));
+        const job = loadJob();
+        if (job) { job.done.push(...held.map(h => h.id)); job.done.length >= job.ids.length ? saveJob(null) : saveJob(job); }
         say('已复制，打开 Folio 粘贴吧');
       }, true], ['关闭', () => window.__folio.close()]]);
     } else {
@@ -145,19 +168,33 @@
       buttons([['好', () => window.__folio.close(), true]]);
     }
   }
-  async function sendAll(ids) {
-    let done = 0;
-    const errors = [];
+  // Send a batch; `job` is the saved record, so a reload can pick up where this stopped
+  async function sendAll(ids, job = { ids: [...new Set(ids)], done: [], failed: {}, at: Date.now() }) {
+    saveJob(job);
+    keepAwake(true);
     buttons([]);
-    for (const id of ids) {
-      say(`正在抓取 ${done + 1} / ${ids.length} …`);
-      progress(done, ids.length);
-      try { await deliver(await fetchWork(id)); }
-      catch (e) { errors.push(e.message); }
-      done++;
-      if (done < ids.length) await sleep(WAIT);
+    const total = job.ids.length;
+    let sent = 0;
+    for (const id of job.ids) {
+      if (job.done.includes(id)) continue;
+      const n = job.done.length + Object.keys(job.failed).length + 1;
+      say(`正在抓取 ${Math.min(n, total)} / ${total} …\n请保持这个页面打开。如果页面被刷新，再点一次书签就能接着送。`);
+      progress(n - 1, total);
+      try {
+        if (await deliver(await fetchWork(id))) { job.done.push(id); sent++; }
+        delete job.failed[id];
+      } catch (e) {
+        job.failed[id] = e.message;
+      }
+      saveJob(job);
+      await sleep(WAIT);
     }
-    finish(done - errors.length, errors.length ? `\n${errors.length} 篇失败：${errors[0]}` : '');
+    keepAwake(false);
+    const failed = Object.keys(job.failed);
+    if (!held.length) saveJob(failed.length ? { ...job, ids: failed, done: [], failed: job.failed } : null);
+    const already = total - sent - failed.length - held.length;
+    finish(sent, (already > 0 ? `\n（其中 ${already} 篇之前已经送过）` : '')
+      + (failed.length ? `\n${failed.length} 篇失败：${job.failed[failed[0]]}。再点一次书签可以重试。` : ''));
   }
 
   // ---------- update check ----------
@@ -188,7 +225,18 @@
     .map(li => ({ li, id: workId(li.querySelector('h4.heading a[href*="/works/"]')?.getAttribute('href')) }))
     .filter(b => b.id);
 
-  if (here) {
+  const pending = loadJob();
+  const left = pending ? pending.ids.filter(id => !pending.done.includes(id)) : [];
+  if (left.length && Date.now() - pending.at < 3 * 864e5) {
+    // An unfinished batch from before (the page was reloaded or closed): offer to continue
+    const failedOnly = left.every(id => pending.failed?.[id]);
+    say(failedOnly ? `上次有 ${left.length} 篇没送成功，要重试吗？`
+      : `上次的批量收书还有 ${left.length} 篇没送完（已送 ${pending.done.length} 篇），要继续吗？`);
+    buttons([
+      ['放弃', () => { saveJob(null); window.__folio.close(); }],
+      [failedOnly ? '重试' : '继续', () => sendAll(left, { ...pending, failed: {} }), true],
+    ]);
+  } else if (here) {
     // A work: send it straight away
     sendAll([here]);
   } else if (blurbs.length) {

@@ -89,8 +89,13 @@ const Sync = {
   // ---------- the sync decision ----------
   reading() { return !document.getElementById('reader').classList.contains('hidden'); },
 
-  async check() {
-    if (!this.on || this.busy || !navigator.onLine) return;
+  async check(wait = false) {
+    if (!this.on || !navigator.onLine) return;
+    if (this.busy) {                                  // a check is already running: optionally wait for it
+      if (!wait) return;
+      while (this.busy) await new Promise(r => setTimeout(r, 200));
+      return;
+    }
     this.busy = true;
     clearTimeout(this.timer);
     this.timer = 0;
@@ -205,16 +210,21 @@ const Sync = {
   async collectInbox() {
     const g = await this.api('/gists/' + await this.ensureInbox());
     const names = Object.keys(g.files).filter(n => /^in-.*\.html$/.test(n));
-    if (names.length) {
-      const sources = [];
-      for (const n of names) {
+    // A few at a time, each group removed from the inbox right after it is saved, so an
+    // interruption never loses a work and never imports more than the last group twice
+    // (and importing a book again only updates it).
+    const total = { count: 0, updated: 0, added: 0 };
+    for (let i = 0; i < names.length; i += 5) {
+      const group = names.slice(i, i + 5), sources = [];
+      for (const n of group) {
         const text = await this.fileText(g.files[n]);
         if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: book.title }); }
       }
       const res = await importBooks(sources, false);
-      await this.patch(this.st.inbox, Object.fromEntries(names.map(n => [n, null])));
-      if (res.count) toast('收到作品：' + importSummary(res));
+      await this.patch(this.st.inbox, Object.fromEntries(group.map(n => [n, null])));
+      for (const k in total) total[k] += res[k];
     }
+    if (total.count) toast('收到作品：' + importSummary(total));
     await this.writeShelfList(g.files['library.json']?.content);
   },
 
