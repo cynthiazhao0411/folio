@@ -4,6 +4,13 @@
 //   contents chapter bodies (large; loaded only when a book is opened)
 //   notes    bookmarks, highlights and notes (indexed by bookId)
 //   daily    reading time per day per book: { key: 'YYYY-MM-DD|bookId', date, bookId, ms }
+//   sessions one record per time a book is opened: { id, bookId, start, end, ms, from, to }
+//            (from / to = { ch, frac, pct }) — the source for history, the calendar and year reviews
+//   snapshots copies of the data taken right before a database upgrade (never synced)
+//
+// Upgrades only ever add stores and fields; nothing is deleted. Each upgrade first copies
+// the existing records into `snapshots`, inside the same transaction, so a failed or
+// faulty migration can always be undone.
 // Every store except contents is synced as one snapshot; contents are synced per book.
 const DB = {
   _db: null,
@@ -12,13 +19,21 @@ const DB = {
   open() {
     if (this._db) return Promise.resolve(this._db);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('folio', 3);
-      req.onupgradeneeded = () => {           // runs on first launch and when the version number goes up
-        const db = req.result, has = n => db.objectStoreNames.contains(n);
+      const req = indexedDB.open('folio', 4);
+      req.onupgradeneeded = e => {            // runs on first launch and when the version number goes up
+        const db = req.result, tx = req.transaction, has = n => db.objectStoreNames.contains(n);
+        const old = e.oldVersion;
         if (!has('meta')) db.createObjectStore('meta', { keyPath: 'id' });
         if (!has('contents')) db.createObjectStore('contents', { keyPath: 'id' });
         if (!has('notes')) db.createObjectStore('notes', { keyPath: 'id' }).createIndex('bookId', 'bookId');
         if (!has('daily')) db.createObjectStore('daily', { keyPath: 'key' });
+        if (!has('sessions')) {
+          const s = db.createObjectStore('sessions', { keyPath: 'id' });
+          s.createIndex('bookId', 'bookId');
+          s.createIndex('start', 'start');
+        }
+        if (!has('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
+        if (old > 0) DB.migrate(tx, old);
       };
       req.onsuccess = () => resolve(this._db = req.result);
       req.onerror = () => reject(req.error);
@@ -38,6 +53,25 @@ const DB = {
       tx.onerror = () => reject(tx.error);
     });
   },
+
+  // Data migrations, run inside the upgrade transaction (all or nothing)
+  migrate(tx, from) {
+    const meta = tx.objectStore('meta'), notes = tx.objectStore('notes'), snaps = tx.objectStore('snapshots');
+    const m = meta.getAll(), n = notes.getAll();
+    n.onsuccess = () => {
+      snaps.put({ id: 'before-v' + this.VERSION + '-' + Date.now(), from, at: Date.now(), meta: m.result, notes: n.result });
+      if (from < 4) {
+        // v4: every rating is kept as its own entry; every note keeps its history
+        for (const b of m.result) {
+          if (b.rating && !b.ratings) { b.ratings = [{ v: b.rating, at: b.lastReadAt || b.addedAt || Date.now() }]; meta.put(b); }
+        }
+        for (const a of n.result) {
+          if (a.note && !a.notes) { a.notes = [{ text: a.note, at: a.updatedAt || a.createdAt || Date.now() }]; notes.put(a); }
+        }
+      }
+    };
+  },
+  VERSION: 4,
 
   // Whole-store helpers used by sync
   async storeNames() { return [...(await this.open()).objectStoreNames]; },
@@ -72,6 +106,8 @@ const DB = {
     rec.ms += ms;
     return this.putDaily(rec);
   },
+  putSession(s) { return this.run('sessions', 'readwrite', st => st.put(s)); },
+  allSessions() { return this.run('sessions', 'readonly', st => st.getAll()); },
   async remove(id) {
     await this.run('meta', 'readwrite', s => s.delete(id));
     await this.run('contents', 'readwrite', Object.assign(s => s.delete(id), { _id: id }));

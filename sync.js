@@ -5,11 +5,14 @@
 // Nothing is merged, so there are never half-merged records.
 //   index gist  folio.json      { app, v, updatedAt, device, stores: { name: rows }, contents: { bookId: hash } }
 //   books gist  book-<id>.json  { id, chapters }  (one file per book, uploaded only when it changes)
+//   inbox gist  in-*.html       works sent from a site by the 收书 bookmark (collector.js);
+//               library.json    what the bookmark needs to spot new chapters: [{ w, c, t, done }]
 // Keeping book text in its own gist means the frequent index updates stay small.
 const Sync = {
   API: 'https://api.github.com',
   INDEX: 'Folio sync · index',
   BOOKS: 'Folio sync · books',
+  INBOX: 'Folio sync · inbox',
   PUSH_DELAY: 60 * 1000,      // after a local change, upload at most once a minute
   st: {},                     // persisted state (localStorage 'folio-sync')
   busy: false,
@@ -101,6 +104,7 @@ const Sync = {
       } else if (this.st.dirty || !remote) {
         await this.push(remote);
       }
+      if (!this.reading()) await this.collectInbox();
       this.st.error = null;
     } catch (e) {
       this.st.error = e.message;
@@ -129,7 +133,7 @@ const Sync = {
     this.applying = true;
     try {
       for (const [name, rows] of Object.entries(remote.stores || {})) {
-        if (name !== 'contents' && names.includes(name)) await DB.replace(name, rows);
+        if (name !== 'contents' && name !== 'snapshots' && names.includes(name)) await DB.replace(name, rows);
       }
       for (const b of books) await DB.putContent(b);
       for (const id of localIds) {
@@ -150,7 +154,7 @@ const Sync = {
   // Upload the local library as the new snapshot
   async push(remote) {
     const rev0 = this.rev;
-    const names = (await DB.storeNames()).filter(n => n !== 'contents');
+    const names = (await DB.storeNames()).filter(n => n !== 'contents' && n !== 'snapshots');
     const stores = {};
     for (const n of names) stores[n] = await DB.dump(n);
     const ids = new Set((stores.meta || []).map(m => m.id));
@@ -183,6 +187,76 @@ const Sync = {
     Object.assign(this.st, { hashes, base: updatedAt, lastSync: Date.now() });
     if (this.rev === rev0) { this.st.dirty = false; this.st.pending = []; }   // else: changed meanwhile, go again later
     this.save();
+  },
+
+  // ---------- inbox: works sent by the 收书 bookmark ----------
+  async ensureInbox() {
+    if (this.st.inbox) return this.st.inbox;
+    const list = await this.api('/gists?per_page=100');
+    this.st.inbox = list.find(g => g.description === this.INBOX)?.id || (await this.api('/gists', {
+      method: 'POST',
+      body: JSON.stringify({ description: this.INBOX, public: false, files: { 'library.json': { content: '[]' } } }),
+    })).id;
+    this.save();
+    return this.st.inbox;
+  },
+
+  // Import everything waiting in the inbox, then clear it
+  async collectInbox() {
+    const g = await this.api('/gists/' + await this.ensureInbox());
+    const names = Object.keys(g.files).filter(n => /^in-.*\.html$/.test(n));
+    if (names.length) {
+      const sources = [];
+      for (const n of names) {
+        const text = await this.fileText(g.files[n]);
+        if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: book.title }); }
+      }
+      const res = await importBooks(sources, false);
+      await this.patch(this.st.inbox, Object.fromEntries(names.map(n => [n, null])));
+      if (res.count) toast('收到作品：' + importSummary(res));
+    }
+    await this.writeShelfList(g.files['library.json']?.content);
+  },
+
+  // The bookmark compares this list with the site to find new chapters
+  async writeShelfList(currentText) {
+    const list = (await DB.allMeta()).map(m => {
+      const w = (m.source || '').match(/\/works\/(\d+)/)?.[1];
+      const stats = Object.entries(m.tags || {}).find(([k]) => /stat/i.test(k))?.[1]?.[0] || '';
+      const ch = stats.match(/Chapters:\s*(\d+)\s*\/\s*(\d+|\?)/);
+      return w && { w, c: m.chapterCount || 0, t: m.title, done: !!ch && ch[1] === ch[2] };
+    }).filter(Boolean);
+    const text = JSON.stringify(list);
+    if (text !== currentText) await this.patch(this.st.inbox, { 'library.json': { content: text } });
+  },
+
+  // The bookmark: collector.js with this device's token and inbox filled in
+  async bookmarklet() {
+    await this.ensureInbox();
+    const src = await (await fetch('collector.js', { cache: 'no-store' })).text();
+    const code = src.split('\n').filter(l => !/^\s*\/\//.test(l)).map(l => l.trim()).filter(Boolean).join('\n')
+      .replace('__TOKEN__', this.st.token).replace('__INBOX__', this.st.inbox);
+    return 'javascript:' + encodeURIComponent(code);
+  },
+
+  async showBookmarklet() {
+    let url;
+    try { url = await this.bookmarklet(); } catch (e) { return toast('生成失败：' + e.message); }
+    const s = quickSheet(`
+      <div class="pk-title">网页收书书签<small>在网站上点一下，作品就进 Folio 书架</small></div>
+      <ol class="bm-steps">
+        <li>点下面的「复制书签」。</li>
+        <li><b>iPhone</b>：在 Safari 里随便打开一个网页，点分享 →「添加书签」，名字写「Folio 收书」，存好。然后打开书签列表 → 编辑 → 点这个书签，把地址全部删掉，粘贴刚才复制的内容。</li>
+        <li><b>电脑 Chrome</b>：按 Ctrl+Shift+O 打开书签管理器 → 右上角 ⋮ →「添加新书签」，名字写「Folio 收书」，网址粘贴。</li>
+        <li>以后在作品页点这个书签，作品会直接送到 Folio；在列表页（收藏、订阅、搜索结果）可以勾选多篇一起送，书架上有新章节的会自动勾上。</li>
+      </ol>
+      <p class="sync-note">书签里含有你的同步令牌，不要发给别人。换了令牌要重新复制一次。</p>
+      <div class="pk-list"><button class="pk-row strong" data-a="copy"><span>复制书签</span></button></div>`);
+    s.card.onclick = async e => {
+      if (!e.target.closest('[data-a=copy]')) return;
+      await copyText(url);
+      toast('已复制书签');
+    };
   },
 
   // ---------- setup ----------
@@ -227,7 +301,7 @@ const Sync = {
   },
 
   disconnect() {
-    const device = this.st.device;
+    const device = this.st.device;   // inbox and token go too; a new connection finds the gists again
     this.st = { device };
     this.save();
   },
@@ -246,6 +320,7 @@ const Sync = {
       <p class="sync-note">本机：${esc(this.st.device)} · ${esc(this.summary())}</p>
       <div class="pk-list">
         <button class="pk-row" data-a="now"><span>立即同步</span></button>
+        <button class="pk-row" data-a="bm"><span>网页收书书签</span><small>在网站上一点就进书架</small></button>
         <button class="pk-row" data-a="name"><span>本机名称</span><small>${esc(this.st.device)}</small></button>
         <button class="pk-row muted" data-a="off"><span>断开同步</span></button>
       </div>`);
@@ -256,6 +331,8 @@ const Sync = {
       if (a === 'now') {
         await this.check();
         toast(this.st.error ? '同步失败：' + this.st.error : '已是最新');
+      } else if (a === 'bm') {
+        this.showBookmarklet();
       } else if (a === 'name') {
         const v = await promptDialog({ title: '本机名称', value: this.st.device, placeholder: '比如：手机、电脑', ok: '保存' });
         if (v) { this.st.device = v; this.save(); }

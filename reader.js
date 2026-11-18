@@ -33,6 +33,7 @@ const Reader = {
       ch: -1, layout: -1, pages: 1,
     }));
     this.bindGestures();
+    this.bindScrub();
 
     // Re-layout only when the viewport size actually changes (debounced 200 ms)
     let lastSize = '', timer;
@@ -54,7 +55,8 @@ const Reader = {
     this.total = sum;
     this.wordCount = book.chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
 
-    this.el.title.textContent = book.title;
+    this.t2s = book.t2s ?? isTraditional(book);       // traditional books show as simplified by default
+    this.el.title.textContent = this.t2s ? toSimplified(book.title) : book.title;
     this.el.reader.classList.remove('hidden');
     this.layoutId++;
     const ch = Math.min(progress?.ch || 0, book.chapters.length - 1);
@@ -82,16 +84,43 @@ const Reader = {
       v.titlePage.innerHTML = `<div class="fp fp-cover">${fp.cover}</div><div class="fp fp-info">${fp.info}</div>`;
       fitTitles(v.titlePage);
     }
+    const T = s => this.t2s ? toSimplified(s) : s;
     v.flow.innerHTML =
       (front ? '<div class="cover-spacer"></div><div class="cover-spacer"></div>' : '') +
-      `<h2 class="ch-title">${c.title}</h2>` +
-      (c.notes ? `<div class="note-chip" data-note="start">✎ 作者注</div>` : '') +
-      `<div class="ch-body">${clean(c.html)}</div>` +
-      (c.endNotes ? `<div class="note-chip" data-note="end">✎ 章末作者注</div>` : '');
+      `<h2 class="ch-title">${T(c.title)}</h2>` +
+      this.authorNote(ch, 'start', T(c.notes)) +
+      `<div class="ch-body">${T(clean(c.html))}</div>` +
+      this.authorNote(ch, 'end', T(c.endNotes));
     this.decorate(v, ch);                                   // highlights (annotations.js)
     v.pages = Math.max(1, Math.round((v.flow.scrollWidth + pad * 2) / W));
     v.ch = ch; v.layout = this.layoutId;
     return v.pages;
+  },
+
+  // The author's notes sit in the text as a quiet box. Short ones show in full; long ones
+  // show their first lines and open with a tap (the page layout is redone around them).
+  NOTE_LONG: 280,
+  openNotes: new Set(),
+  authorNote(ch, which, html) {
+    if (!html || !html.replace(/<[^>]+>/g, '').trim()) return '';
+    const key = this.book.id + '|' + ch + '|' + which;
+    const long = html.replace(/<[^>]+>/g, '').length > this.NOTE_LONG, open = !long || this.openNotes.has(key);
+    return `<aside class="an an-${which}${open ? '' : ' folded'}" data-key="${key}">
+      <div class="an-k">${which === 'end' ? '作者的话 · 章末' : '作者的话'}</div>
+      <div class="an-b">${clean(html)}</div>
+      ${long ? `<button class="an-more">${open ? '收起' : '展开全部'}</button>` : ''}
+    </aside>`;
+  },
+  toggleNote(key) {
+    this.openNotes.has(key) ? this.openNotes.delete(key) : this.openNotes.add(key);
+    // Re-lay out this chapter and stay on the page where the note starts
+    const v = this.views[this.top];
+    v.layout = -1;
+    this.views[1 - this.top].layout = -1;
+    this.ensure(v, this.ch);
+    const box = v.flow.querySelector(`.an[data-key="${CSS.escape(key)}"]`);
+    const page = box ? Math.floor((box.offsetLeft + 1) / this.W()) : this.page;
+    this.commit(this.show(v, this.ch, page));
   },
 
   // Show chapter `ch`, page `page` (or 'last') on sheet `v`
@@ -100,9 +129,9 @@ const Reader = {
     page = page === 'last' ? pages - 1 : Math.max(0, Math.min(page, pages - 1));
     v.flow.style.transform = `translate3d(${-page * this.W()}px,0,0)`;
     const c = this.book.chapters[ch];
-    v.header.innerHTML = `<span>${c.title}</span>`;
+    v.header.innerHTML = `<span>${this.t2s ? toSimplified(c.title) : c.title}</span>`;
     const pct = (this.offsets[ch] + c.html.length * (page + 1) / pages) / this.total * 100;
-    v.footer.innerHTML = `<span>${page + 1} / ${pages}</span><span>${pct.toFixed(1)}%</span>`;
+    v.footer.innerHTML = `<span>第 ${ch + 1} 章 · ${page + 1} / ${pages}</span><span>全书 ${pct < 1 ? pct.toFixed(1) : Math.floor(pct)}%</span>`;
     v.el.classList.toggle('on-front', this.isCover(ch, page));
     v.el.classList.toggle('on-info', this.isCover(ch, page) && page === 1);
     this.updateRibbon(v, ch, page);
@@ -123,6 +152,7 @@ const Reader = {
                         : getComputedStyle(document.body).getPropertyValue('--bg').trim();
     }
     this.onProgress?.({ ch: s.ch, frac: s.page / s.pages, pct: s.pct });
+    this.updateScrub(s.pct);
     // While idle, pre-layout the chapter the next turn is likely to need on the hidden sheet
     clearTimeout(this._pre);
     this._pre = setTimeout(() => {
@@ -339,8 +369,8 @@ const Reader = {
       const mark = e.target.closest('mark.hl');
       if (mark) return this.editMark(mark.dataset.id);
       if (e.target.closest('.ip-start')) return this.next();      // "start the story" on the info page
-      const chip = e.target.closest('.note-chip');
-      if (chip) return this.showNote(chip.dataset.note);
+      const an = e.target.closest('.an');
+      if (an && (e.target.closest('.an-more') || an.classList.contains('folded'))) return this.toggleNote(an.dataset.key);
       if (e.target.closest('a')) return;
       if (this.el.reader.classList.contains('menu-open')) return this.closeMenu();
       const x = e.clientX / innerWidth;
@@ -356,16 +386,89 @@ const Reader = {
     });
   },
 
-  closeMenu() { this.el.reader.classList.remove('menu-open'); },
+  closeMenu() {
+    this.el.reader.classList.remove('menu-open');
+    document.getElementById('jump-pop')?.classList.add('hidden');
+  },
 
-  // Author's notes open in a bottom sheet so the page layout never changes
-  showNote(which) {
-    const c = this.book.chapters[this.ch];
-    const p = this.el.note;
-    p.innerHTML = `<div class="sheet-card"><div class="sheet-grip"></div>
-      <h4>${which === 'end' ? '章末作者注' : '作者注'}</h4>
-      <div class="sheet-body sheet-scroll">${which === 'end' ? c.endNotes : c.notes}</div></div>`;
-    Sheet.open(p);
+  // ================= Whole-book scrubber =================
+  // Position is measured the same way as the progress percentage: by chapter text length.
+  bindScrub() {
+    const scrub = document.getElementById('scrub'), tip = scrub.querySelector('.scrub-tip');
+    const at = x => { const r = scrub.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
+    const locate = f => {
+      const pos = f * this.total;
+      let ch = this.offsets.findIndex((o, i) => pos < o + this.book.chapters[i].html.length);
+      if (ch < 0) ch = this.book.chapters.length - 1;
+      return { ch, frac: Math.max(0, Math.min(1, (pos - this.offsets[ch]) / (this.book.chapters[ch].html.length || 1))) };
+    };
+    let dragging = false;
+    const move = x => {
+      const f = at(x), { ch } = locate(f);
+      this.drawScrub(f * 100);
+      const t = this.book.chapters[ch].title;
+      tip.textContent = `${this.t2s ? toSimplified(t) : t} · ${Math.round(f * 100)}%`;
+      tip.style.left = (f * 100) + '%';
+    };
+    scrub.addEventListener('pointerdown', e => {
+      dragging = true;
+      scrub.setPointerCapture(e.pointerId);
+      scrub.classList.add('dragging');
+      move(e.clientX);
+    });
+    scrub.addEventListener('pointermove', e => { if (dragging) move(e.clientX); });
+    const up = e => {
+      if (!dragging) return;
+      dragging = false;
+      scrub.classList.remove('dragging');
+      const { ch, frac } = locate(at(e.clientX));
+      if (this.sel) this.clearSel();
+      const v = this.views[this.top], pages = this.ensure(v, ch);
+      const first = ch === 0 && this.titlePageHTML && frac > 0 ? 2 : 0;
+      this.commit(this.show(v, ch, Math.max(first, Math.min(pages - 1, Math.floor(frac * pages)))));
+    };
+    scrub.addEventListener('pointerup', up);
+    scrub.addEventListener('pointercancel', up);
+    document.getElementById('btn-prev').onclick = () => this.prev();
+    document.getElementById('btn-next').onclick = () => this.next();
+    const pop = document.getElementById('jump-pop');
+    document.getElementById('btn-jump').onclick = () => pop.classList.toggle('hidden');
+    pop.onclick = e => {
+      const j = e.target.closest('[data-jump]')?.dataset.jump;
+      if (!j) return;
+      pop.classList.add('hidden');
+      this.jumpEnd(j === 'book-end');
+    };
+  },
+  drawScrub(pct) {
+    const scrub = document.getElementById('scrub');
+    scrub.style.setProperty('--p', Math.max(0, Math.min(100, pct)) + '%');
+  },
+  updateScrub(pct) {
+    const scrub = document.getElementById('scrub');
+    if (!scrub || scrub.classList.contains('dragging')) return;
+    if (scrub.dataset.book !== this.book.id) {          // chapter ticks, drawn once per book
+      scrub.dataset.book = this.book.id;
+      const n = this.book.chapters.length;
+      scrub.querySelector('.scrub-ticks').innerHTML = n > 1 && n <= 200
+        ? this.offsets.slice(1).map(o => `<i style="left:${o / this.total * 100}%"></i>`).join('') : '';
+    }
+    this.drawScrub(pct);
+  },
+  // Last page of this chapter, or of the whole book
+  jumpEnd(book) {
+    if (this.sel) this.clearSel();
+    const ch = book ? this.book.chapters.length - 1 : this.ch;
+    this.commit(this.show(this.views[this.top], ch, 'last'));
+  },
+
+  // Traditional → Simplified display (lib/t2s.js); the stored text never changes
+  setT2S(on) {
+    this.t2s = !!on;
+    this.layoutId++;
+    const v = this.views[this.top], frac = this.page / this.pages, pages = this.ensure(v, this.ch);
+    this.commit(this.show(v, this.ch, Math.round(frac * pages)));
+    this.el.title.textContent = this.t2s ? toSimplified(this.book.title) : this.book.title;
   },
 
   // ================= Table of contents =================
@@ -462,6 +565,26 @@ const Reader = {
 };
 
 // Strip inline styles, alignment and empty paragraphs so the reader's typography applies
+// ---------- Traditional → Simplified ----------
+let T2S = null;
+function t2sTable() {
+  if (!T2S) { T2S = new Map(); for (let i = 0; i < T2S_PAIRS.length; i += 2) T2S.set(T2S_PAIRS[i], T2S_PAIRS[i + 1]); }
+  return T2S;
+}
+function toSimplified(s) {
+  if (!s) return s;
+  t2sTable();
+  return s.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, c => T2S.get(c) || c);
+}
+// A book counts as traditional when a noticeable share of its characters have a simplified form
+function isTraditional(book) {
+  t2sTable();
+  const sample = book.chapters.slice(0, 3).map(c => c.html.replace(/<[^>]+>/g, '')).join('').slice(0, 20000);
+  const han = sample.match(/[\u3400-\u9fff]/g) || [];
+  if (han.length < 50) return false;
+  return han.filter(c => T2S.has(c)).length / han.length > .04;
+}
+
 function clean(html) {
   const box = document.createElement('div');
   box.innerHTML = html;

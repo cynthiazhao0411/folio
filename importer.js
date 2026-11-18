@@ -7,11 +7,42 @@
 //   2. Plain HTML (chapters split on <h1>/<h2>/<h3> headings)
 //   3. Plain text (chapter headings detected by pattern; UTF-8 / GBK auto-detected)
 //   4. A saved full-work web page (from the share-sheet shortcut), see parseWorkPage
+//   5. EPUB, PDF, and ZIP files holding any of these (formats.js)
 
 const Importer = {
   async parse(file) {
     const text = decodeText(await file.arrayBuffer());
     return this.parseText(text, file.name.replace(/\.[^.]+$/, ''), /\.txt$/i.test(file.name));
+  },
+
+  // Any supported file -> [{ book, label }]; a ZIP can hold many books.
+  // Files that cannot be read come back as { error, label }.
+  async parseFile(file, name = file.name) {
+    const base = name.replace(/^.*\//, '').replace(/\.[^.]+$/, ''), label = name.replace(/^.*\//, '');
+    const ext = (name.match(/\.([^.\/]+)$/) || [])[1]?.toLowerCase() || '';
+    try {
+      if (ext === 'pdf') return [{ book: this.finish(await parsePdf(file, base)), label }];
+      if (ext === 'epub' || ext === 'zip') {
+        const zip = await Zip.open(file);
+        if (zip.has('META-INF/container.xml')) return [{ book: this.finish(await parseEpub(zip, base)), label }];
+        const out = [];
+        for (const n of zip.names) {
+          if (/(^|\/)(__MACOSX|\.)/.test(n) || !/\.(html?|txt|epub|pdf)$/i.test(n)) continue;
+          out.push(...await this.parseFile(new Blob([await zip.bytes(n)]), n));
+        }
+        if (!out.length) return [{ error: '压缩包里没有可导入的文件', label }];
+        return out;
+      }
+      const text = decodeText(await file.arrayBuffer());
+      return [{ book: this.parseText(text, base, ext === 'txt'), label }];
+    } catch (err) {
+      console.error(err);
+      return [{ error: err.message, label }];
+    }
+  },
+  finish(book) {
+    book.id = 'b-' + hash(book.source || book.title + '|' + book.authors.join(','));
+    return book;
   },
 
   // Also used for pasted text: HTML is recognized by its tags, anything else is plain text
@@ -99,9 +130,17 @@ function parseWorkPage(doc) {
     });
   } else {
     const text = box.querySelector('.userstuff');
-    if (text) chapters.push({ title, notes: pre?.querySelector('.notes blockquote')?.innerHTML || '', html: cleanText(text), endNotes: '' });
+    if (text) chapters.push({ title, notes: '', html: cleanText(text), endNotes: '' });
   }
-  return { title, authors, summary, tags, source, chapters: chapters.filter(c => c.html.trim()) };
+  // The author's notes for the whole work: before the first chapter and after the last
+  const workNotes = pre?.querySelector(':scope > .notes blockquote')?.innerHTML || '';
+  const workEnd = doc.querySelector('#work_endnotes blockquote')?.innerHTML || '';
+  const kept = chapters.filter(c => c.html.trim());
+  if (kept.length) {
+    if (workNotes) kept[0].notes = workNotes + (kept[0].notes ? '<hr>' + kept[0].notes : '');
+    if (workEnd) { const last = kept[kept.length - 1]; last.endNotes = (last.endNotes ? last.endNotes + '<hr>' : '') + workEnd; }
+  }
+  return { title, authors, summary, tags, source, chapters: kept };
 }
 
 // Structured export layout:

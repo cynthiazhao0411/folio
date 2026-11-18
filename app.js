@@ -23,13 +23,17 @@ applySettings();
 // The shelf itself lives in library.js
 const renderShelf = () => Library.render();
 Library.bind();
+document.getElementById('continue').onclick = e => {
+  const id = e.currentTarget.dataset.id;
+  if (id) openBook(id, e.currentTarget.querySelector('.cover'));
+};
 
 // ================= Opening books / saving progress =================
 let current = null, saveTimer = null;
 
 // The shelf stays rendered underneath the reader, so its scroll position survives.
 let animating = false;
-async function openBook(id) {
+async function openBook(id, fromCover) {
   if (animating) return;
   animating = true;
   const reader = document.getElementById('reader');
@@ -37,14 +41,18 @@ async function openBook(id) {
     const meta = await DB.getMeta(id);
     const content = await DB.getContent(id);
     meta.lastReadAt = Date.now();
+    delete meta.newChapters;                                   // the new-chapter badge is cleared once seen
     current = meta;
     DB.putMeta(meta);
     Reader.setAnnots(await DB.notesFor(id));                  // bookmarks, highlights, notes
     reader.style.opacity = '0';                                // lay out invisibly first
     Reader.open({ ...meta, chapters: content.chapters }, meta.progress);
     if (!meta.words) { meta.words = Reader.wordCount; DB.putMeta(meta); }   // books imported before word counts existed
+    if (meta.t2s === undefined) { meta.t2s = Reader.t2s; DB.putMeta(meta); }  // remember the script detection
+    t2sLabel();
     Clock.start(id);
-    const cover = document.querySelector(`.card[data-id="${CSS.escape(id)}"] .cover`);
+    Session.begin(meta);
+    const cover = fromCover || document.querySelector(`.card[data-id="${CSS.escape(id)}"] .cover`);
     if (cover) await BookAnim.open(cover, reader);
     else await BookAnim.fadeIn(reader);
   } catch (err) {
@@ -70,6 +78,7 @@ async function closeBook() {
     await Clock.stop();                                        // save the last seconds of reading time
     const id = current?.id;
     if (current) await DB.putMeta(current);
+    await Session.end(current);
     current = null;
     await renderShelf();                                       // refresh progress on the cards
     const card = id && document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
@@ -95,6 +104,54 @@ async function closeBook() {
 Reader.store = { put: rec => DB.putNote(rec), del: id => DB.delNote(id) };
 Reader.metaInfo = () => current;
 
+// ================= Reading sessions =================
+// One record per opening of a book: when, how long (effective reading time), and from
+// where to where. Title and authors are copied in so history outlives a deleted book.
+const Session = {
+  cur: null,
+  pos: p => p ? { ch: p.ch, frac: +(p.frac || 0).toFixed(4), pct: +(p.pct || 0).toFixed(2) } : { ch: 0, frac: 0, pct: 0 },
+  begin(m) {
+    const now = Date.now();
+    this.cur = { id: 's-' + now.toString(36) + Math.random().toString(36).slice(2, 6), bookId: m.id,
+                 title: m.title, authors: m.authors || [], start: now, end: now, ms: 0,
+                 from: this.pos(m.progress), to: this.pos(m.progress) };
+    DB.putSession(this.cur);
+  },
+  touch(m, ms = 0) {
+    if (!this.cur || this.cur.bookId !== m?.id) return;
+    this.cur.end = Date.now();
+    this.cur.ms += ms;
+    this.cur.to = this.pos(m.progress);
+    return DB.putSession(this.cur);
+  },
+  async end(m) {
+    await this.touch(m);
+    this.cur = null;
+  },
+};
+
+// ================= Screen stays on while reading =================
+// Same rule as the reading clock: after 90 s without a touch the lock is let go and the
+// phone's own auto-lock takes over; the next touch keeps the screen on again.
+const Awake = {
+  lock: null,
+  async check() {
+    const want = !!current && !document.hidden && !Clock.idle();
+    try {
+      if (want && !this.lock && navigator.wakeLock) {
+        this.lock = await navigator.wakeLock.request('screen');
+        this.lock.addEventListener('release', () => { this.lock = null; });
+      } else if (!want && this.lock) {
+        await this.lock.release();
+        this.lock = null;
+      }
+    } catch { this.lock = null; }       // not supported, or refused (e.g. low power mode)
+  },
+};
+setInterval(() => Awake.check(), 3000);
+['pointerdown', 'keydown'].forEach(t => document.addEventListener(t, () => Awake.check(), { passive: true }));
+document.addEventListener('visibilitychange', () => Awake.check());
+
 // ================= Reading time =================
 Clock.init();
 Clock.onFlush = async (bookId, ms) => {
@@ -105,6 +162,7 @@ Clock.onFlush = async (bookId, ms) => {
   (m.run || (m.run = { ms: 0, counted: false })).ms += ms;
   if (checkFinished(m)) celebrate(m);
   await DB.putMeta(m);
+  await Session.touch(m, ms);
 };
 function celebrate(m) {
   toast(m.reads > 1 ? `读完了 · 这是第 ${m.reads} 遍` : '读完了这本书 ✦');
@@ -178,13 +236,14 @@ Reader.onProgress = p => {
   current.progress = p;
   if (checkFinished(current)) celebrate(current);
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => DB.putMeta(current), 400);
+  const m = current;                      // the book may be closed before the timer fires
+  saveTimer = setTimeout(() => DB.putMeta(m), 400);
 };
 
 // ================= Import =================
 // From files (the 导入 button) or from the clipboard (see the share-sheet shortcut in the README)
-async function importBooks(sources) {        // sources: [{ book, label }]
-  let lastId = null, count = 0;
+async function importBooks(sources, open = true) {        // sources: [{ book, label }]
+  let lastId = null, count = 0, updated = 0;
   for (const { book, label } of sources) {
     if (!book.chapters.length) { toast(`《${label}》里没有读到正文`); continue; }
     const old = await DB.getMeta(book.id);
@@ -193,12 +252,23 @@ async function importBooks(sources) {        // sources: [{ book, label }]
     const keep = {};
     for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed'])
       if (old?.[k] !== undefined) keep[k] = old[k];
+    for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
+      if (old?.[k] !== undefined) keep[k] = old[k];
     if (old?.renamed) info.title = old.title;
+    const words = chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
+    // Every import that changes the book is remembered; new chapters get a badge on the shelf
+    const versions = keep.versions || [];
+    const prev = versions[versions.length - 1] || (old ? { chapters: old.chapterCount, words: old.words } : null);
+    if (!prev || prev.chapters !== chapters.length || prev.words !== words) versions.push({ at: Date.now(), chapters: chapters.length, words });
+    const added = old ? chapters.length - (old.chapterCount || 0) : 0;
+    if (added > 0) keep.newChapters = (keep.newChapters || 0) + added;
+    if (old) updated++;
     await DB.putMeta({
       ...info,
       ...keep,
+      versions,
       chapterCount: chapters.length,
-      words: chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0),
+      words,
       addedAt: old?.addedAt || Date.now(),
       lastReadAt: old?.lastReadAt,
       progress: old?.progress,
@@ -207,16 +277,25 @@ async function importBooks(sources) {        // sources: [{ book, label }]
     lastId = book.id; count++;
   }
   await renderShelf();
-  if (count === 1) openBook(lastId);          // open right away when a single book comes in
-  return count;
+  if (count === 1 && open) openBook(lastId);  // open right away when a single book comes in
+  return { count, updated, added: count - updated };
 }
+const importSummary = r => r.updated && r.added ? `新增 ${r.added} 本 · 更新 ${r.updated} 本`
+  : r.updated ? `更新了 ${r.updated} 本` : `新增 ${r.added} 本`;
 
 document.getElementById('picker').addEventListener('change', async e => {
   const files = [...e.target.files];
   e.target.value = '';
-  const sources = [];
-  for (const file of files) sources.push({ book: await Importer.parse(file), label: file.name });
-  importBooks(sources);
+  if (!files.length) return;
+  if (files.length > 1 || /\.(zip|pdf|epub)$/i.test(files[0].name)) toast('正在读取…');
+  const sources = [], failed = [];
+  for (const file of files) {
+    for (const r of await Importer.parseFile(file)) (r.error ? failed : sources).push(r);
+  }
+  const res = await importBooks(sources, sources.length === 1 && !failed.length);
+  if (failed.length) {
+    dialog({ title: `${failed.length} 个文件没能导入`, message: failed.map(f => `${f.label}：${f.error}`).join('\n'), ok: '好' });
+  } else if (res.count > 1 || res.updated) toast(importSummary(res));
 });
 
 // The 导入 button offers two ways in: a file, or a work copied to the clipboard
@@ -227,8 +306,16 @@ async function importFromClipboard() {
   let text = '';
   try { text = await navigator.clipboard.readText(); } catch { return toast('没有读取剪贴板的权限'); }
   if (!text || text.length < 200) return toast('剪贴板里没有作品内容');
+  // Several works copied by the 收书 bookmark come as one bundle
+  if (text.startsWith('{"app":"folio-bundle"')) {
+    const items = JSON.parse(text).items || [];
+    const sources = items.map(it => { const book = Importer.parseText(it.html, '粘贴的作品'); return { book, label: book.title }; });
+    const res = await importBooks(sources, sources.length === 1);
+    if (res.count) toast(importSummary(res));
+    return;
+  }
   const book = Importer.parseText(text, '粘贴的作品');
-  const n = await importBooks([{ book, label: book.title }]);
+  const n = (await importBooks([{ book, label: book.title }])).count;
   if (n) toast(`已导入《${book.title}》`);
 }
 // Opening the app with #paste (from the shortcut) shows a one-tap paste prompt;
@@ -254,6 +341,16 @@ function setFont(d) {
 }
 document.getElementById('btn-smaller').onclick = () => setFont(-1);
 document.getElementById('btn-bigger').onclick = () => setFont(+1);
+// 简 / 原文: show a traditional-script book in simplified characters (remembered per book)
+const t2sLabel = () => { document.querySelector('#btn-t2s span').textContent = Reader.t2s ? '简体' : '原文'; };
+document.getElementById('btn-t2s').onclick = () => {
+  if (!current) return;
+  current.t2s = !Reader.t2s;
+  Reader.setT2S(current.t2s);
+  t2sLabel();
+  DB.putMeta(current);
+  toast(current.t2s ? '已转为简体显示' : '显示原文');
+};
 document.getElementById('btn-turn').onclick = () => {
   settings.turn = settings.turn === 'curl' ? 'slide' : 'curl';
   applySettings();
@@ -280,9 +377,11 @@ document.getElementById('btn-hidden').onclick = async () => {
 
 document.getElementById('btn-backup').onclick = async () => {
   Sheet.close(moreSheet);
-  const data = { app: 'folio', version: 1, savedAt: Date.now(),
-                 meta: await DB.allMeta(), contents: await DB.allContents(),
-                 notes: await DB.allNotes(), daily: await DB.allDaily(), settings };
+  // Every store is included, so records added in later versions are backed up too
+  const stores = {};
+  for (const n of await DB.storeNames()) if (n !== 'snapshots') stores[n] = await DB.dump(n);
+  const data = { app: 'folio', version: 2, savedAt: Date.now(), stores, settings };
+  localStorage.setItem('folio-backup-at', Date.now());
   const name = `folio-backup-${new Date().toLocaleDateString('sv')}.json`;
   const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
   // iOS: use the share sheet ("Save to Files"); desktop: regular download
@@ -303,13 +402,16 @@ document.getElementById('restore-picker').addEventListener('change', async e => 
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'folio') throw new Error('不是书架备份文件');
-    for (const m of data.meta) await DB.putMeta(m);
-    for (const c of data.contents) await DB.putContent(c);
-    for (const n of data.notes || []) await DB.putNote(n);
-    for (const d of data.daily || []) await DB.putDaily(d);
+    // Version 1 files kept each store as a top-level field
+    const stores = data.stores || { meta: data.meta, contents: data.contents, notes: data.notes, daily: data.daily };
+    const names = await DB.storeNames();
+    for (const [name, rows] of Object.entries(stores)) {
+      if (!rows || !names.includes(name) || name === 'snapshots') continue;
+      for (const r of rows) await DB.run(name, 'readwrite', s => s.put(r));
+    }
     if (data.settings) { Object.assign(settings, data.settings); applySettings(); }
     await renderShelf();
-    toast(`已恢复 ${data.meta.length} 本书`);
+    toast(`已恢复 ${(stores.meta || []).length} 本书`);
   } catch (err) {
     alert('恢复失败：' + err.message);
   }
@@ -322,3 +424,15 @@ navigator.storage?.persist?.();
 
 renderShelf();
 Sync.init();
+
+// Without device sync, the data lives only on this device: a gentle weekly reminder to back up
+setTimeout(async () => {
+  if (Sync.on || !(await DB.allMeta()).length) return;
+  if (!localStorage.getItem('folio-backup-at')) localStorage.setItem('folio-backup-at', Date.now());   // start counting now
+  const at = +localStorage.getItem('folio-backup-at'), asked = +localStorage.getItem('folio-backup-asked') || 0;
+  const week = 7 * 864e5;
+  if (Date.now() - at > week && Date.now() - asked > week) {
+    localStorage.setItem('folio-backup-asked', Date.now());
+    toast('一周没备份了：可以在「⋯」里备份或开启设备同步');
+  }
+}, 4000);

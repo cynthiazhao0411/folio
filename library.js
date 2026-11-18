@@ -80,6 +80,25 @@ function applyStatus(m, s) {
   }
 }
 
+// Every rating is kept in m.ratings ({ v, at, read }); the book's rating is their average,
+// to the nearest half star, halves rounding up. Rating again within 5 minutes counts as
+// fixing a slip and replaces the last entry instead of adding one.
+const RATE_FIX_MS = 5 * 60 * 1000;
+function ratingOf(list) {
+  if (!list?.length) return 0;
+  const avg = list.reduce((s, r) => s + r.v, 0) / list.length;
+  return Math.floor(avg * 2 + .5) / 2;
+}
+function rateBook(m, n) {
+  const list = m.ratings || (m.ratings = m.rating ? [{ v: m.rating, at: m.lastReadAt || Date.now() }] : []);
+  const last = list[list.length - 1], now = Date.now();
+  if (last && now - last.at < RATE_FIX_MS) Object.assign(last, { v: n, at: now });
+  else list.push({ v: n, at: now, read: m.reads || 0 });
+  m.rating = ratingOf(list);
+  return m.rating;
+}
+const starCount = r => Math.round(r || 0);      // whole stars shown until half-star display arrives
+
 // After finishing a book (or marking it 读完), ask for a rating — once. A book has a
 // single rating; later it can be changed from its card, never added twice.
 function askRating(m) {
@@ -115,9 +134,9 @@ function askRating(m) {
     preview(n);
     stars.slice(0, n).forEach((s, i) => s.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.4)' }, { transform: 'scale(1)' }], { duration: 300, delay: i * 50 }));
     const meta = await DB.getMeta(m.id);
-    meta.rating = n;
+    rateBook(meta, n);
     await DB.putMeta(meta);
-    if (typeof current !== 'undefined' && current?.id === m.id) current.rating = n;
+    if (typeof current !== 'undefined' && current?.id === m.id) Object.assign(current, { rating: meta.rating, ratings: meta.ratings });
     setTimeout(() => { close(); toast('已评分 ' + '★'.repeat(n)); Library.render(); }, 600);
   });
 }
@@ -243,6 +262,23 @@ const Library = {
         + chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('') + tags.map(t => chip('t:' + t, t, '#')).join('')
       : '';
 
+    // Continue reading: the book opened most recently (not one already finished)
+    const cont = document.getElementById('continue');
+    let last = !this.showHidden && !this.selecting && this.books
+      .filter(b => b.lastReadAt && !b.hidden && statusOf(b) !== 'done')
+      .sort((a, b) => b.lastReadAt - a.lastReadAt)[0];
+    cont.classList.toggle('hidden', !last);
+    if (last) {
+      if (last.t2s) last = { ...last, title: toSimplified(last.title) };
+      const pct = last.progress?.pct || 0, ch = (last.progress?.ch || 0) + 1;
+      cont.dataset.id = last.id;
+      cont.innerHTML = `${jacket(last, 'mini')}
+        <div class="ct"><div class="ct-k">继续阅读</div><div class="ct-t">${esc(last.title)}</div>
+        <div class="ct-s">读到第 ${ch} 章 · ${pct < 1 ? pct.toFixed(1) : Math.floor(pct)}%</div></div>
+        <button class="ct-go">继续 →</button>`;
+      fitTitles(cont);
+    }
+
     const grid = document.getElementById('grid');
     if (!this.books.length || (!list.length && this.filter === 'all' && !this.showHidden)) {
       grid.innerHTML = `
@@ -251,12 +287,13 @@ const Library = {
           <p class="empty-title">书架还是空的</p>
           <p class="empty-sub">导入第一本书，开始阅读</p>
           <label for="picker" class="empty-btn">＋ 导入书籍</label>
-          <p class="empty-hint">支持 HTML、TXT · 可一次选多本</p>
+          <p class="empty-hint">支持 EPUB、HTML、TXT、PDF、ZIP · 可一次选多本</p>
         </div>`;
       return;
     }
     if (!list.length) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">这里还没有书</p></div>`; return; }
     grid.innerHTML = list.map(b => {
+      if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
       const st = statusOf(b), pct = b.progress?.pct || 0;
       const sub = st === 'done' ? (b.reads > 1 ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
       return `
@@ -264,11 +301,12 @@ const Library = {
           <div class="card-cover">
             ${jacket(b)}
             ${b.pinned ? `<span class="pin-badge">${ICON.pin}</span>` : ''}
+            ${b.newChapters ? `<span class="new-badge">新 +${b.newChapters} 章</span>` : ''}
             <span class="pick"></span>
           </div>
           <div class="card-info">
             <div class="t">${esc(b.title)}</div>
-            <div class="s">${b.rating ? `<span class="stars">${'★'.repeat(b.rating)}</span>` : ''}${esc(sub)}</div>
+            <div class="s">${b.rating ? `<span class="stars">${'★'.repeat(starCount(b.rating))}</span>` : ''}${esc(sub)}</div>
             <div class="progress"><i style="width:${st === 'done' ? 100 : pct}%"></i></div>
           </div>
         </div>`;
@@ -343,7 +381,7 @@ const Library = {
           <div class="bc-meta">
             <div class="bc-title">${esc(b.title)}</div>
             <div class="bc-author">${esc(b.authors.join('、') || '佚名')}</div>
-            <div class="bc-stars" aria-label="评分">${[1, 2, 3, 4, 5].map(n => `<button data-rate="${n}" class="${n <= (b.rating || 0) ? 'on' : ''}">★</button>`).join('')}</div>
+            <div class="bc-stars" aria-label="评分">${[1, 2, 3, 4, 5].map(n => `<button data-rate="${n}" class="${n <= starCount(b.rating) ? 'on' : ''}">★</button>`).join('')}</div>
           </div>
         </div>
         ${facts.length || place.length ? `<div class="bc-facts">${facts.map(f => `<span>${f}</span>`).join('')}${place.length ? `<div class="bc-place">${place.join('')}</div>` : ''}</div>` : ''}
@@ -426,13 +464,13 @@ const Library = {
     sheet.addEventListener('click', async e => {
       if (Date.now() - openedAt < 450) return;              // the click that ends the long-press
       const rate = e.target.closest('[data-rate]');
-      if (rate) {                                           // tap a star; tap the same star again to clear
-        const n = +rate.dataset.rate;                       // one rating per book; tapping changes it
-        b.rating = n;
+      if (rate) {                                           // tap a star: adds a rating, the card shows the average
+        const n = +rate.dataset.rate;
         sheet.querySelector('.bc-rate-hint')?.remove();
         sheet.querySelectorAll('[data-rate]').forEach((x, i) => x.classList.toggle('on', i < n));
         rate.animate([{ transform: 'scale(1.45) rotate(-12deg)' }, { transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.34,1.56,.64,1)' });
-        await this.update([id], m => { m.rating = n; }, false);
+        await this.update([id], m => { b.rating = rateBook(m, n); b.ratings = m.ratings; }, false);
+        sheet.querySelectorAll('[data-rate]').forEach((x, i) => x.classList.toggle('on', i < starCount(b.rating)));
         return;
       }
       const sb = e.target.closest('[data-st]');
@@ -609,7 +647,7 @@ const Library = {
       const n = +b.dataset.n;
       stars.forEach((x, i) => x.classList.toggle('on', i < n));
       b.animate?.([{ transform: 'scale(1.35)' }, { transform: 'scale(1)' }], { duration: 260, easing: 'cubic-bezier(.34,1.56,.64,1)' });
-      await this.update(ids, m => { m.rating = n; });
+      await this.update(ids, m => { rateBook(m, n); });
       setTimeout(() => { s.close(); this.exitSelect(); }, 280);
     };
   },

@@ -16,7 +16,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" href="favicon.png">
 
-  <link rel="stylesheet" href="style.css?v=1.1.1">
+  <link rel="stylesheet" href="style.css?v=1.2.0">
 </head>
 <body>
 
@@ -30,7 +30,7 @@
         </button>
         <button id="btn-more" class="icon-btn" aria-label="更多">⋯</button>
         <button id="btn-import" class="import-btn">＋ 导入</button>
-        <input type="file" id="picker" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
+        <input type="file" id="picker" accept=".html,.htm,.txt,.epub,.pdf,.zip,text/html,text/plain,application/epub+zip,application/pdf,application/zip" multiple hidden>
       </div>
     </header>
 
@@ -78,13 +78,14 @@
           <input type="file" id="restore-picker" accept=".json,application/json" hidden>
         </label>
         <button class="sheet-item cancel" id="btn-more-close">取消</button>
-        <div class="app-version">Folio v1.1.1</div>
+        <div class="app-version">Folio v1.2.0</div>
       </div>
     </div>
     <div class="shelf-sub">
       <p id="shelf-count" class="shelf-count"></p>
       <button id="btn-select" class="text-btn hidden">选择</button>
     </div>
+    <div id="continue" class="continue hidden"></div>
     <div id="chips" class="chips"></div>
     <div id="grid" class="grid"></div>
   </section>
@@ -124,11 +125,28 @@
       </button>
     </div>
     <div id="bottombar" class="bar">
-      <button id="btn-toc"><b>☰</b>目录</button>
-      <button id="btn-smaller"><b>A</b>小</button>
-      <button id="btn-bigger"><b style="font-size:1.3em">A</b>大</button>
-      <button id="btn-theme"><b>◐</b>底色</button>
-      <button id="btn-turn"><b>❏</b><span>仿真</span></button>
+      <div class="nav-row">
+        <button id="btn-prev" class="nav-btn" aria-label="上一页">‹</button>
+        <div id="scrub" class="scrub">
+          <div class="scrub-track"><i class="scrub-fill"></i><div class="scrub-ticks"></div></div>
+          <div class="scrub-knob"></div>
+          <div class="scrub-tip"></div>
+        </div>
+        <button id="btn-next" class="nav-btn" aria-label="下一页">›</button>
+        <button id="btn-jump" class="nav-btn jump" aria-label="跳转">⤓</button>
+        <div id="jump-pop" class="jump-pop hidden">
+          <button data-jump="ch-end">本章末尾</button>
+          <button data-jump="book-end">全书末尾</button>
+        </div>
+      </div>
+      <div class="tool-row">
+        <button id="btn-toc"><b>☰</b>目录</button>
+        <button id="btn-smaller"><b>A</b>小</button>
+        <button id="btn-bigger"><b style="font-size:1.3em">A</b>大</button>
+        <button id="btn-theme"><b>◐</b>底色</button>
+        <button id="btn-t2s"><b>简</b><span>原文</span></button>
+        <button id="btn-turn"><b>❏</b><span>仿真</span></button>
+      </div>
     </div>
 
     <div id="sel-layer"></div>
@@ -138,16 +156,18 @@
     <div id="note-panel" class="sheet-modal hidden"></div>
   </section>
 
-  <script src="ui.js?v=1.1.1"></script>
-  <script src="db.js?v=1.1.1"></script>
-  <script src="importer.js?v=1.1.1"></script>
-  <script src="reader.js?v=1.1.1"></script>
-  <script src="annotations.js?v=1.1.1"></script>
-  <script src="stats.js?v=1.1.1"></script>
-  <script src="cover.js?v=1.1.1"></script>
-  <script src="epub.js?v=1.1.1"></script>
-  <script src="library.js?v=1.1.1"></script>
-  <script src="sync.js?v=1.1.1"></script>
-  <script src="app.js?v=1.1.1"></script>
+  <script src="ui.js?v=1.2.0"></script>
+  <script src="lib/t2s.js?v=1.2.0"></script>
+  <script src="db.js?v=1.2.0"></script>
+  <script src="importer.js?v=1.2.0"></script>
+  <script src="formats.js?v=1.2.0"></script>
+  <script src="reader.js?v=1.2.0"></script>
+  <script src="annotations.js?v=1.2.0"></script>
+  <script src="stats.js?v=1.2.0"></script>
+  <script src="cover.js?v=1.2.0"></script>
+  <script src="epub.js?v=1.2.0"></script>
+  <script src="library.js?v=1.2.0"></script>
+  <script src="sync.js?v=1.2.0"></script>
+  <script src="app.js?v=1.2.0"></script>
 </body>
 </html>

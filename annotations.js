@@ -130,13 +130,17 @@ Object.assign(Reader, {
   // ================= Records =================
   addAnnot(rec) {
     rec = { id: uid(), bookId: this.book.id, color: this.lastColor || 'yellow', note: '', createdAt: Date.now(), ...rec };
+    if (rec.note) rec.notes = [{ text: rec.note, at: rec.createdAt }];
     this.annots.push(rec);
     this.store?.put(rec);
     if (rec.type === 'mark') this.refreshMarks();
     return rec;
   },
   updateAnnot(rec, changes) {
-    Object.assign(rec, changes, { updatedAt: Date.now() });
+    const now = Date.now();
+    // Notes keep their history: each saved text is added to rec.notes with its time
+    if (changes.note && changes.note !== rec.note) (rec.notes || (rec.notes = [])).push({ text: changes.note, at: now });
+    Object.assign(rec, changes, { updatedAt: now });
     this.store?.put(rec);
     if (rec.type === 'mark') this.refreshMarks();
   },

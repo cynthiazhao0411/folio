@@ -231,7 +231,7 @@ const StatsPage = {
   ratingHTML() {
     const rated = [...this.data.metas.values()].filter(m => m.rating);
     if (!rated.length) return `<div class="st-rank-title">评分分布</div><div class="st-empty">还没有给书打过分<br><small>长按书架上的书，在书卡上点星星就能打分</small></div>`;
-    const counts = [5, 4, 3, 2, 1].map(n => [n, rated.filter(m => m.rating === n)]);
+    const counts = [5, 4, 3, 2, 1].map(n => [n, rated.filter(m => starCount(m.rating) === n)]);
     const max = Math.max(...counts.map(([, l]) => l.length));
     const avg = rated.reduce((s, m) => s + m.rating, 0) / rated.length;
     return `
