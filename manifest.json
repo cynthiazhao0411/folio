@@ -1,7 +1,9 @@
 {
   "name": "Folio 阅读器",
   "short_name": "Folio",
+  "id": "./",
   "start_url": "./",
+  "description": "A mobile-first e-book reader.",
   "display": "standalone",
   "background_color": "#f6f1e7",
   "theme_color": "#f6f1e7",

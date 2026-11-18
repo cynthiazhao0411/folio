@@ -88,6 +88,7 @@ async function closeBook() {
     reader.style.opacity = '';
     reader.getAnimations().forEach(a => a.cancel());
     animating = false;
+    Sync.check();                                              // upload this session / take news from the other device
   }
 }
 
@@ -265,7 +266,11 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2200);
 }
 const moreSheet = document.getElementById('more-sheet');
-document.getElementById('btn-more').onclick = () => Sheet.open(moreSheet);
+document.getElementById('btn-more').onclick = () => {
+  document.getElementById('sync-sub').textContent = Sync.summary();
+  Sheet.open(moreSheet);
+};
+document.getElementById('btn-sync').onclick = async () => { await Sheet.close(moreSheet); Sync.openPanel(); };
 document.getElementById('btn-more-close').onclick = () => Sheet.close(moreSheet);
 document.getElementById('btn-hidden').onclick = async () => {
   await Sheet.close(moreSheet);
@@ -316,3 +321,4 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 navigator.storage?.persist?.();
 
 renderShelf();
+Sync.init();

@@ -158,7 +158,7 @@ function dialog({ title, message = '', input = null, ok = '确定', danger = fal
         <div class="alert-body">
           <div class="alert-title">${esc(title)}</div>
           ${message ? `<div class="alert-msg">${esc(message)}</div>` : ''}
-          ${input !== null ? `<input class="alert-input" value="${esc(input.value || '')}" placeholder="${esc(input.placeholder || '')}" maxlength="80">` : ''}
+          ${input !== null ? `<input class="alert-input" value="${esc(input.value || '')}" placeholder="${esc(input.placeholder || '')}" maxlength="${input.max || 80}">` : ''}
         </div>
         <div class="alert-actions">
           <button data-r="0">取消</button>
@@ -181,7 +181,7 @@ function dialog({ title, message = '', input = null, ok = '确定', danger = fal
   });
 }
 const confirmDialog = o => dialog(o);
-const promptDialog = o => dialog({ ...o, input: { value: o.value, placeholder: o.placeholder } });
+const promptDialog = o => dialog({ ...o, input: { value: o.value, placeholder: o.placeholder, max: o.max } });
 
 // A bottom sheet built on the fly (pickers). Returns { root, card, close }
 function quickSheet(html, cls = '') {

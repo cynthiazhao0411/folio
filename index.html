@@ -16,7 +16,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" href="favicon.png">
 
-  <link rel="stylesheet" href="style.css?v=1.1.0">
+  <link rel="stylesheet" href="style.css?v=1.1.1">
 </head>
 <body>
 
@@ -72,12 +72,13 @@
       <div class="sheet-card">
         <div class="sheet-grip"></div>
         <button class="sheet-item" id="btn-hidden">隐藏的书<small>查看和管理隐藏起来的书</small></button>
+        <button class="sheet-item" id="btn-sync">设备同步<small id="sync-sub">手机和电脑共用一个书架</small></button>
         <button class="sheet-item" id="btn-backup">备份书架<small>把所有书和进度存成一个文件</small></button>
         <label class="sheet-item">恢复备份<small>选之前存的备份文件</small>
           <input type="file" id="restore-picker" accept=".json,application/json" hidden>
         </label>
         <button class="sheet-item cancel" id="btn-more-close">取消</button>
-        <div class="app-version">Folio v1.1.0</div>
+        <div class="app-version">Folio v1.1.1</div>
       </div>
     </div>
     <div class="shelf-sub">
@@ -137,15 +138,16 @@
     <div id="note-panel" class="sheet-modal hidden"></div>
   </section>
 
-  <script src="ui.js?v=1.1.0"></script>
-  <script src="db.js?v=1.1.0"></script>
-  <script src="importer.js?v=1.1.0"></script>
-  <script src="reader.js?v=1.1.0"></script>
-  <script src="annotations.js?v=1.1.0"></script>
-  <script src="stats.js?v=1.1.0"></script>
-  <script src="cover.js?v=1.1.0"></script>
-  <script src="epub.js?v=1.1.0"></script>
-  <script src="library.js?v=1.1.0"></script>
-  <script src="app.js?v=1.1.0"></script>
+  <script src="ui.js?v=1.1.1"></script>
+  <script src="db.js?v=1.1.1"></script>
+  <script src="importer.js?v=1.1.1"></script>
+  <script src="reader.js?v=1.1.1"></script>
+  <script src="annotations.js?v=1.1.1"></script>
+  <script src="stats.js?v=1.1.1"></script>
+  <script src="cover.js?v=1.1.1"></script>
+  <script src="epub.js?v=1.1.1"></script>
+  <script src="library.js?v=1.1.1"></script>
+  <script src="sync.js?v=1.1.1"></script>
+  <script src="app.js?v=1.1.1"></script>
 </body>
 </html>

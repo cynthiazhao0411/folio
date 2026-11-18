@@ -4,8 +4,10 @@
 //   contents chapter bodies (large; loaded only when a book is opened)
 //   notes    bookmarks, highlights and notes (indexed by bookId)
 //   daily    reading time per day per book: { key: 'YYYY-MM-DD|bookId', date, bookId, ms }
+// Every store except contents is synced as one snapshot; contents are synced per book.
 const DB = {
   _db: null,
+  onWrite: null,          // set by sync.js: called with (storeName) after every successful write
 
   open() {
     if (this._db) return Promise.resolve(this._db);
@@ -29,7 +31,25 @@ const DB = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, mode);
       const req = fn(tx.objectStore(store));
-      tx.oncomplete = () => resolve(req && req.result);
+      tx.oncomplete = () => {
+        if (mode === 'readwrite') this.onWrite?.(store, fn._id);
+        resolve(req && req.result);
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  // Whole-store helpers used by sync
+  async storeNames() { return [...(await this.open()).objectStoreNames]; },
+  dump(store)   { return this.run(store, 'readonly', s => s.getAll()); },
+  // Replace a store's whole contents in one transaction (no onWrite: this is how remote data comes in)
+  async replace(store, rows) {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(store, 'readwrite'), s = tx.objectStore(store);
+      s.clear();
+      for (const r of rows) s.put(r);
+      tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   },
@@ -39,7 +59,7 @@ const DB = {
   putMeta(m)    { return this.run('meta', 'readwrite', s => s.put(m)); },
   getContent(id){ return this.run('contents', 'readonly', s => s.get(id)); },
   allContents() { return this.run('contents', 'readonly', s => s.getAll()); },
-  putContent(c) { return this.run('contents', 'readwrite', s => s.put(c)); },
+  putContent(c) { return this.run('contents', 'readwrite', Object.assign(s => s.put(c), { _id: c.id })); },
   notesFor(bookId) { return this.run('notes', 'readonly', s => s.index('bookId').getAll(bookId)); },
   allNotes()    { return this.run('notes', 'readonly', s => s.getAll()); },
   putNote(n)    { return this.run('notes', 'readwrite', s => s.put(n)); },
@@ -54,7 +74,7 @@ const DB = {
   },
   async remove(id) {
     await this.run('meta', 'readwrite', s => s.delete(id));
-    await this.run('contents', 'readwrite', s => s.delete(id));
+    await this.run('contents', 'readwrite', Object.assign(s => s.delete(id), { _id: id }));
     for (const n of await this.notesFor(id)) await this.delNote(n.id);
   },
 };
