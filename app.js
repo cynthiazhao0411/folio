@@ -395,8 +395,15 @@ async function importFromClipboard() {
     // Several works copied by the 收书 bookmark come as one bundle
     const items = text.startsWith('{"app":"folio-bundle"') ? JSON.parse(text).items || [] : [{ html: text }];
     for (const [i, it] of items.entries()) {
-      try { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: bookName(book.title) }); }
-      catch (err) { parseFailed.push({ label: `第 ${i + 1} 篇`, error: importError(err) }); }
+      try {
+        if (it.b64) {                                // an e-book file copied by the bookmark
+          const bin = atob(it.b64), bytes = new Uint8Array(bin.length);
+          for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+          for (const r of await Importer.parseFile(new Blob([bytes]), it.name || 'book.epub')) {
+            if (r.book) sources.push({ book: r.book, label: bookName(r.book.title) }); else parseFailed.push({ label: r.label, error: r.error });
+          }
+        } else { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: bookName(book.title) }); }
+      } catch (err) { parseFailed.push({ label: `第 ${i + 1} 篇`, error: importError(err) }); }
     }
     const res = await importBooks(sources, sources.length === 1 && !parseFailed.length,
       (i, n) => progress.set(n > 1 ? `正在导入 ${i} / ${n}…` : '正在导入…'));
@@ -461,8 +468,9 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2200);
 }
 const moreSheet = document.getElementById('more-sheet');
-document.getElementById('btn-more').onclick = () => {
+document.getElementById('btn-more').onclick = async () => {
   document.getElementById('sync-sub').textContent = Sync.summary();
+  document.getElementById('btn-undo-restore').classList.toggle('hidden', !(await Backup.canUndo()));
   Sheet.open(moreSheet);
 };
 document.getElementById('btn-sync').onclick = async () => { await Sheet.close(moreSheet); Sync.openPanel(); };
@@ -489,51 +497,99 @@ function downloadFile(file) {
   setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 30000);
 }
 
-document.getElementById('btn-backup').onclick = async () => {
-  Sheet.close(moreSheet);
-  try {
-    // Every store is included, so records added in later versions are backed up too. Book titles are
-    // saved exactly as stored (including any 【】 pairing); only the display is cleaned.
-    const stores = {};
-    for (const n of await DB.storeNames()) if (n !== 'snapshots') stores[n] = await DB.dump(n);
-    const data = { app: 'folio', version: 2, savedAt: Date.now(), stores, settings, folders: Library.extraFolders() };   // folders: empty ones live outside the database
-    const name = `folio-backup-${new Date().toLocaleDateString('sv')}.json`;
-    const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
-    let saved = false;
-    if (useShareSheet(file)) {                       // iOS / Android: share sheet ("Save to Files")
-      try { await navigator.share({ files: [file] }); saved = true; }
-      catch (err) { if (err?.name === 'AbortError') return; }
-    }
-    if (!saved) downloadFile(file);
-    localStorage.setItem('folio-backup-at', Date.now());
-  } catch (err) {
-    console.error('backup failed', err);
-    alert('备份失败：' + (err?.message || '未知错误'));
+// Save a file: the share sheet on phones ("Save to Files"), a download elsewhere. Must run
+// straight from a tap, so it is only ever called from a button's click handler.
+async function saveFile(file) {
+  if (useShareSheet(file)) {
+    try { await navigator.share({ files: [file] }); return true; }
+    catch (err) { if (err?.name === 'AbortError') return false; }
   }
+  downloadFile(file);
+  return true;
+}
+
+// 备份书架: build the complete backup (backup.js), check it, then offer the file with a button
+// (the save needs a fresh tap: building a large backup takes longer than a tap stays valid)
+document.getElementById('btn-backup').onclick = async () => {
+  await Sheet.close(moreSheet);
+  const wait = quickSheet(`<div class="pk-title">正在备份…<small>打包所有书、进度、笔记和设置，并逐项检查</small></div><div class="bk-spin"></div>`);
+  let result;
+  try { result = await Backup.create(); }
+  catch (err) {
+    console.error('backup failed', err);
+    await wait.close();
+    return dialog({ title: '备份失败', message: err?.message || '未知错误', ok: '好' });
+  }
+  await wait.close();
+  const name = `folio-backup-${new Date().toLocaleDateString('sv')}.zip`;
+  const file = new File([result.blob], name, { type: 'application/zip' });
+  const size = result.blob.size < 1048576 ? Math.max(1, Math.round(result.blob.size / 1024)) + ' KB' : (result.blob.size / 1048576).toFixed(result.blob.size > 10485760 ? 0 : 1) + ' MB';
+  const s = quickSheet(`
+    <div class="pk-title">备份已生成，检查通过 ✓<small>${name} · ${size}</small></div>
+    <p class="bk-sum">${esc(Backup.describe(result.manifest.summary)).replace(/\n/g, '<br>')}</p>
+    <p class="sync-note">恢复时在「⋯ → 恢复备份」里选这个文件即可，不用解压。</p>
+    <div class="pk-list"><button class="pk-row strong" data-a="save"><span>保存备份文件</span></button></div>`);
+  s.card.onclick = async e => {
+    if (!e.target.closest('[data-a=save]')) return;
+    if (await saveFile(file)) { localStorage.setItem('folio-backup-at', Date.now()); s.close(); }
+  };
 };
 
+// 恢复备份: read and check the whole file first, show what is in it, then merge or replace
 document.getElementById('restore-picker').addEventListener('change', async e => {
   const file = e.target.files[0];
   e.target.value = '';
-  Sheet.close(moreSheet);
+  await Sheet.close(moreSheet);
   if (!file) return;
+  let data;
+  try { data = await Backup.read(file); }
+  catch (err) { return dialog({ title: '无法恢复', message: err.message, ok: '好' }); }
+  const sum = Backup.summarize(data.stores, data.books);
+  const when = data.manifest.createdAt ? new Date(data.manifest.createdAt).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
+  const mode = await new Promise(resolve => {
+    const s = quickSheet(`
+      <div class="pk-title">恢复这个备份？<small>${esc(when)}${data.manifest.device ? ' · 来自' + esc(data.manifest.device) : ''}</small></div>
+      <p class="bk-sum">${esc(Backup.describe(sum)).replace(/\n/g, '<br>')}</p>
+      <div class="pk-list">
+        <button class="pk-row col" data-m="merge"><span>合并到现在的书架</span><small>备份里的书和记录放回来，这台设备上多出来的都保留</small></button>
+        <button class="pk-row col" data-m="replace"><span>完全替换成备份</span><small>书架变得和备份时一模一样</small></button>
+      </div>
+      <p class="sync-note">恢复前会先自动保存现在的书架，恢复后不满意可以在「⋯」里撤销。</p>`);
+    s.card.onclick = async ev => {
+      const m = ev.target.closest('[data-m]')?.dataset.m;
+      if (!m) return;
+      await s.close();
+      resolve(m);
+    };
+    s.root.addEventListener('click', ev => { if (ev.target === s.root) resolve(null); });
+  });
+  if (!mode) return;
+  if (mode === 'replace' && !(await confirmDialog({ title: '完全替换？', message: '现在书架上不在备份里的书和记录会被移走（可以撤销）。', ok: '替换', danger: true }))) return;
   try {
-    const data = JSON.parse(await file.text());
-    if (data.app !== 'folio') throw new Error('不是书架备份文件');
-    // Version 1 files kept each store as a top-level field
-    const stores = data.stores || { meta: data.meta, contents: data.contents, notes: data.notes, daily: data.daily };
-    const names = await DB.storeNames();
-    for (const [name, rows] of Object.entries(stores)) {
-      if (!rows || !names.includes(name) || name === 'snapshots') continue;
-      for (const r of rows) await DB.run(name, 'readwrite', s => s.put(r));
-    }
-    if (data.settings) { Object.assign(settings, data.settings); applySettings(); }
+    const { unknown } = await Backup.apply(data, mode);
+    Object.assign(settings, JSON.parse(localStorage.getItem('settings') || '{}'));
+    applySettings();
     await renderShelf();
-    toast(`已恢复 ${(stores.meta || []).length} 本书`);
+    dialog({ title: '恢复完成，检查通过 ✓', ok: '好',
+      message: Backup.describe(sum) + (unknown.length ? `\n\n备份来自更新的 Folio，${unknown.join('、')} 需要先把这台设备更新到最新版本再恢复一次。` : '') });
   } catch (err) {
-    alert('恢复失败：' + err.message);
+    console.error(err);
+    await renderShelf();
+    dialog({ title: '恢复没有完成', message: err.message, ok: '好' });
   }
 });
+
+document.getElementById('btn-undo-restore').onclick = async () => {
+  await Sheet.close(moreSheet);
+  if (!(await confirmDialog({ title: '撤销上次恢复？', message: '书架会回到上次恢复之前的样子。', ok: '撤销' }))) return;
+  try {
+    await Backup.undo();
+    Object.assign(settings, JSON.parse(localStorage.getItem('settings') || '{}'));
+    applySettings();
+    await renderShelf();
+    toast('已回到恢复之前');
+  } catch (err) { dialog({ title: '撤销失败', message: err.message, ok: '好' }); }
+};
 
 // ================= Offline cache + persistent storage =================
 // Service workers require HTTPS (or localhost); registration silently fails otherwise

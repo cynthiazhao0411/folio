@@ -6,7 +6,9 @@
 //   daily    reading time per day per book: { key: 'YYYY-MM-DD|bookId', date, bookId, ms }
 //   sessions one record per time a book is opened: { id, bookId, start, end, ms, from, to }
 //            (from / to = { ch, frac, pct }) — the source for history, the calendar and year reviews
-//   snapshots copies of the data taken right before a database upgrade (never synced)
+//   prefs    user data that is not about one book: { key, value } (e.g. key 'folders' = folders
+//            created before any book is in them). Synced and backed up like everything else.
+//   snapshots copies of the data taken right before a database upgrade or a restore (never synced)
 //
 // Upgrades only ever add stores and fields; nothing is deleted. Each upgrade first copies
 // the existing records into `snapshots`, inside the same transaction, so a failed or
@@ -19,7 +21,7 @@ const DB = {
   open() {
     if (this._db) return Promise.resolve(this._db);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('folio', 4);
+      const req = indexedDB.open('folio', 5);
       req.onupgradeneeded = e => {            // runs on first launch and when the version number goes up
         const db = req.result, tx = req.transaction, has = n => db.objectStoreNames.contains(n);
         const old = e.oldVersion;
@@ -33,6 +35,7 @@ const DB = {
           s.createIndex('start', 'start');
         }
         if (!has('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
+        if (!has('prefs')) db.createObjectStore('prefs', { keyPath: 'key' });
         if (old > 0) DB.migrate(tx, old);
       };
       req.onsuccess = () => resolve(this._db = req.result);
@@ -71,7 +74,25 @@ const DB = {
       }
     };
   },
-  VERSION: 4,
+  VERSION: 5,
+
+  // Small pieces of user data that are not about one book
+  async getPref(key) { return (await this.run('prefs', 'readonly', s => s.get(key)))?.value; },
+  setPref(key, value) { return this.run('prefs', 'readwrite', s => s.put({ key, value })); },
+
+  // Many rows in one transaction (one onWrite call for the whole batch)
+  async putMany(store, rows) {
+    const db = await this.open();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(store, 'readwrite'), s = tx.objectStore(store);
+      for (const r of rows) s.put(r);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('写入被中止'));
+    });
+  },
+  keys(store) { return this.run(store, 'readonly', s => s.getAllKeys()); },
+  async keyPath(store) { return (await this.open()).transaction(store).objectStore(store).keyPath; },
 
   // Whole-store helpers used by sync
   async storeNames() { return [...(await this.open()).objectStoreNames]; },
@@ -85,6 +106,7 @@ const DB = {
       for (const r of rows) s.put(r);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('写入被中止'));
     });
   },
 

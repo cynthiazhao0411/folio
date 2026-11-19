@@ -221,7 +221,7 @@ const Sync = {
   // Import everything waiting in the inbox, then clear it
   async collectInbox() {
     const g = await this.api('/gists/' + await this.ensureInbox());
-    const names = Object.keys(g.files).filter(n => /^in-.*\.html$/.test(n));
+    const names = Object.keys(g.files).filter(n => /^in-.*\.(html|b64)$/.test(n));
     // A few at a time, each group removed from the inbox right after it is saved (and uploaded),
     // so an interruption never loses a work and never imports more than the last group twice
     // (and importing a book again only updates it).
@@ -231,8 +231,16 @@ const Sync = {
       const group = names.slice(i, i + 5), sources = [];
       for (const n of group) {
         const text = await this.fileText(g.files[n]);
-        if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: bookName(book.title) }); }
-        else skipped++;
+        if (!text) { skipped++; continue; }
+        if (n.endsWith('.b64')) {                     // an e-book file (EPUB, PDF, TXT…) sent by the bookmark
+          const ext = n.replace(/\.b64$/, '').split('.').pop();
+          const cut = text.indexOf('\n'), fname = cut > 0 ? text.slice(0, cut).trim() : '收到的作品.' + ext;
+          const bin = atob(text.slice(cut + 1).trim()), bytes = new Uint8Array(bin.length);
+          for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+          for (const r of await Importer.parseFile(new Blob([bytes]), fname)) {
+            if (r.book) sources.push({ book: r.book, label: bookName(r.book.title) }); else skipped++;
+          }
+        } else { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: bookName(book.title) }); }
       }
       const res = await importBooks(sources, false);
       const retry = res.failed.filter(f => f.retry).length;

@@ -7,6 +7,8 @@
 //     works already on your shelf that have new chapters are marked and pre-selected
 //   • anywhere: "检查书架更新" looks up every unfinished work on your shelf and sends
 //     the ones with new chapters
+//   • on any other site: finds the e-book files the page offers for download (EPUB, TXT,
+//     HTML, PDF, ZIP — e.g. a public-domain library's book page) and sends the ones you pick
 // Works travel through your own secret inbox gist; Folio collects them when it opens.
 // If the site does not let the page talk to GitHub, the works are copied to the
 // clipboard instead, to paste into Folio.
@@ -40,7 +42,7 @@
       .h i { flex: 1 }
       .x { border: 0; background: none; font-size: 20px; color: #8a8178; padding: 0 4px; }
       .m { color: #6f665d; font-size: 13px; margin: 6px 0 10px; min-height: 1.5em; white-space: pre-line; }
-      .m em { font-style: normal; font-size: 11px; color: #a0522d; background: #ece3d2; border-radius: 999px; padding: 1px 8px; margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
+      .m em { font-style: normal; font-size: 11px; color: #a0522d; background: #ece3d2; border-radius: 999px; padding: 1px 8px; margin-right: 6px; white-space: nowrap; vertical-align: 1px; }
       .r { display: flex; gap: 8px; flex-wrap: wrap; }
       button.b { flex: 1; border: 0; border-radius: 999px; padding: 9px 12px; font: inherit; font-size: 14px;
                  background: #e9e1d3; color: #2b2622; }
@@ -61,15 +63,16 @@
     const m = $('.m');
     m.textContent = '';
     const [first, ...rest] = t.split('\n');
+    // The title of the work being fetched goes in front of the progress text
+    if (tag) { const e = document.createElement('em'); e.textContent = `《${tag}》`; m.append(e); }
     m.append(first);
-    if (tag) { const e = document.createElement('em'); e.textContent = tag; m.append(e); }
     if (rest.length) m.append('\n' + rest.join('\n'));
   };
-  // Just a few characters of the title: drop a leading 【tag】, keep 5 characters
+  // A short form of the title: drop a leading 【tag】, keep 12 characters
   const shortTitle = t => {
     const s = String(t || '').replace(/^\s*[【\[［〔(（][^】\]］〕)）]{1,24}[】\]］〕)）]\s*/, '').trim() || String(t || '').trim();
     const c = Array.from(s);
-    return c.length > 5 ? c.slice(0, 5).join('') + '…' : s;
+    return c.length > 12 ? c.slice(0, 12).join('') + '…' : s;
   };
   const progress = (i, n) => { $('.bar').style.display = n ? 'block' : 'none'; $('.bar i').style.width = n ? (i / n * 100) + '%' : 0; };
   const buttons = list => {
@@ -143,14 +146,15 @@
   async function deliver(w) {
     if (!blocked) {
       try {
-        await api('PATCH', { files: { [`in-${w.id}.html`]: { content: w.html } } });   // one file per work: never twice
+        const file = w.b64 ? `in-${w.id}.${w.ext}.b64` : `in-${w.id}.html`;              // one file per work: never twice
+        await api('PATCH', { files: { [file]: { content: w.b64 ? w.name + '\n' + w.b64 : w.html } } });   // a file: its name on the first line
         return true;
       } catch (e) {
         if (!(e instanceof TypeError)) throw e;      // TypeError = the request never left the page
         blocked = true;
       }
     }
-    held.push({ id: w.id, html: w.html });
+    held.push(w.b64 ? { id: w.id, name: w.name, b64: w.b64 } : { id: w.id, html: w.html });
     return false;
   }
   let shelf = null;
@@ -172,7 +176,7 @@
     if (held.length) {
       say(`已抓好 ${held.length} 篇，但没能连到 GitHub（网络不稳，或这个网站不让页面连出去）。\n网络恢复后再点一次书签就能接着送；也可以点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
       buttons([['复制', async () => {
-        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => ({ html: h.html })) }));
+        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => h.b64 ? { name: h.name, b64: h.b64 } : { html: h.html }) }));
         const job = loadJob();
         if (job) { job.done.push(...held.map(h => h.id)); job.done.length >= job.ids.length ? saveJob(null) : saveJob(job); }
         say('已复制，打开 Folio 粘贴吧');
@@ -295,8 +299,68 @@
       box.onchange = () => { box.checked ? picked.add(b.id) : picked.delete(b.id); update(); };
     }
     update();
+  } else if (fileLinks().length) {
+    pickFiles(fileLinks());
   } else {
-    say('这一页没有作品。可以检查书架上连载的更新。');
+    say('这一页没有可以收的作品或电子书文件。可以检查书架上连载的更新。');
     buttons([['检查书架更新', checkShelf, true]]);
+  }
+
+  // ---------- e-book files offered on the page ----------
+  // Links whose address ends in an e-book format (also the "book.epub3.images" style some
+  // libraries use). Each file is downloaded with this page's own access and sent as-is.
+  function fileLinks() {
+    const seen = new Set(), out = [];
+    for (const a of document.querySelectorAll('a[href]')) {
+      let url;
+      try { url = new URL(a.getAttribute('href'), location.href); } catch { continue; }
+      const m = url.pathname.toLowerCase().match(/\.(epub|txt|html?|pdf|zip)(?:[.\d\w-]*)$/) || url.pathname.toLowerCase().match(/\.(epub)\d?\.(?:images|noimages)$/);
+      if (!m || !/^https?:$/.test(url.protocol) || seen.has(url.href)) continue;
+      if (m[1].startsWith('htm') && !/download|下载/i.test(a.textContent + a.getAttribute('download'))) continue;   // ordinary page links are not books
+      seen.add(url.href);
+      out.push({ url: url.href, ext: m[1].replace('htm', 'html').replace('htmll', 'html'), label: (a.textContent || '').replace(/\s+/g, ' ').trim() || url.pathname.split('/').pop() });
+    }
+    return out;
+  }
+  function pickFiles(list) {
+    const title = (document.querySelector('h1')?.textContent || document.title).replace(/\s+/g, ' ').trim().slice(0, 80);
+    // One copy of the book is enough: EPUB first, then TXT, then the rest
+    const order = ['epub', 'txt', 'html', 'pdf', 'zip'];
+    const first = [...list].sort((a, b) => order.indexOf(a.ext) - order.indexOf(b.ext))[0];
+    const picked = new Set([first.url]);
+    const draw = () => {
+      say(`这一页有 ${list.length} 个电子书文件，选要送到 Folio 的：\n` + list.map((f, i) => `${picked.has(f.url) ? '☑' : '☐'} ${i + 1}. ${f.ext.toUpperCase()} · ${f.label.slice(0, 30)}`).join('\n'));
+      buttons([
+        ...list.slice(0, 6).map((f, i) => [`${picked.has(f.url) ? '✓ ' : ''}${i + 1}`, () => { picked.has(f.url) ? picked.delete(f.url) : picked.add(f.url); draw(); }]),
+        [`送出 ${picked.size} 个`, () => picked.size && sendFiles(list.filter(f => picked.has(f.url)), title), true],
+      ]);
+    };
+    draw();
+  }
+  async function sendFiles(files, title) {
+    buttons([]);
+    keepAwake(true);
+    let sent = 0;
+    const errors = [];
+    for (const [i, f] of files.entries()) {
+      say(`正在下载 ${i + 1} / ${files.length}：${title}（${f.ext.toUpperCase()}）…`);
+      progress(i, files.length);
+      try {
+        const r = await fetch(f.url, { credentials: 'include' });
+        if (!r.ok) throw new Error('下载失败 ' + r.status);
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        if (bytes.length > 20 * 1048576) throw new Error('文件超过 20 MB，请下载后在 Folio 里导入');
+        let bin = '';
+        for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+        let h = 0x811c9dc5;
+        for (const c of f.url) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193); }
+        const name = (title || 'book').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60) + '.' + f.ext;
+        if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, b64: btoa(bin) })) sent++;
+      } catch (e) {
+        errors.push(e instanceof TypeError ? '这个网站不允许页面下载文件（跨站限制），请手动下载后导入' : e.message);
+      }
+    }
+    keepAwake(false);
+    finish(sent, errors.length ? `\n${errors.length} 个失败：${errors[0]}` : '');
   }
 })().catch(e => alert('Folio 收书出错：' + e.message));

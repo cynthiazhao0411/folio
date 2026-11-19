@@ -47,12 +47,12 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Reliable batches**: progress is shown while importing ("正在导入 3 / 20"). Each book is saved text first, record second, then read back; if any step fails that book is rolled back (or its previous version restored), so the shelf never holds a book without its text. Empty files and files with almost no text are rejected, and one summary states exactly how many books were added or updated and which files failed and why.
 - **Paste import**: paste one book's HTML, or a bundle of several, from the clipboard.
 - **EPUB export**: share any book as an EPUB 3 file.
-- **Backup and restore**: export every record (books, progress, notes, sessions, ratings) to one JSON file. Without sync, a gentle reminder appears after a week without a backup.
+- **Complete backup and one-step restore**: one ZIP file holds every book (text and chapter structure), all metadata (titles, authors, covers, progress, ratings, status, read-throughs, pins, folders, tags), highlights, bookmarks and notes with their positions and history, reading sessions and daily totals, empty folders and the reader settings. Every backup is read back and compared with the data before it is offered; every restore is checked before and after writing. Restore can merge into the current shelf or replace it, the current shelf is copied aside first so a restore can be undone, and older JSON backups still restore. Without sync, a gentle reminder appears after a week without a backup.
 - **Offline**: a service worker caches the app, so it opens without a network.
 
 ### Sync and web collection
 - **Phone ↔ computer sync**: connect a GitHub personal access token with gist access on each device. The whole library is stored in your own secret gists; the device that changed last wins, so nothing is ever half-merged. Book text is uploaded only when it changes, and a book that is open is never replaced under you.
-- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. A work leaves the inbox only after it is saved on the device *and* uploaded to the sync gists, so a later sync from the other device can never replace a work that exists nowhere else; if that upload cannot happen, the work simply stays in the inbox and is picked up again (importing again only updates). Files in the inbox that contain no text are skipped with a notice. Batches are saved after every work, so if the page is reloaded, tapping the bookmark again continues with only the works that are left; the screen is kept awake while a batch runs. If a site blocks the connection, the bookmark copies the works to the clipboard instead.
+- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. A work leaves the inbox only after it is saved on the device *and* uploaded to the sync gists, so a later sync from the other device can never replace a work that exists nowhere else; if that upload cannot happen, the work simply stays in the inbox and is picked up again (importing again only updates). Files in the inbox that contain no text are skipped with a notice. Batches are saved after every work, so if the page is reloaded, tapping the bookmark again continues with only the works that are left; the screen is kept awake while a batch runs. If a site blocks the connection, the bookmark copies the works to the clipboard instead. On other sites, the bookmark lists the e-book files the page offers for download (EPUB, TXT, PDF, ZIP, HTML) and sends the ones you pick; this works where the site lets its own pages download those files.
 
 ## Technical notes
 
@@ -69,7 +69,8 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 | `library.js` | Library: filtering, continue card, catalog card, ratings, pickers, multi-select toolbar, custom dialogs |
 | `epub.js` | EPUB 3 export: XHTML normalisation plus a minimal ZIP writer (store mode, CRC-32) |
 | `ui.js` | Web Animations API motion: draggable bottom sheets, book open/close transitions, title fitting |
-| `db.js` | IndexedDB wrapper: metadata, text, notes, daily totals and reading sessions in separate stores; upgrades only add, and snapshot the data first |
+| `db.js` | IndexedDB wrapper: metadata, text, notes, daily totals, reading sessions and prefs in separate stores; upgrades only add, and snapshot the data first |
+| `backup.js` | Complete backup (ZIP: manifest with counts and checksums, one file per store, one per book, settings), verification, merge / replace restore, undo |
 | `app.js` | App shell: import, settings, sessions, wake lock, debounced progress saving, backup and restore |
 | `sw.js` | Network-first with cache fallback; a new release takes effect on the next launch |
 | `lib/` | [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0), loaded only when a PDF is imported; a traditional → simplified table generated from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache-2.0) |
@@ -82,8 +83,7 @@ Folio's own interface (shelf, covers, front pages, The End, dialogs, menus, pane
 
 - `fonts/NotoSerifSC-Regular.woff` (400) and `fonts/NotoSerifSC-Medium.woff` (500-700, so headings never get a synthesised bold). Official Noto Serif CJK 2.002 outlines, subset to GB2312 + Latin + punctuation and converted to WOFF. Characters outside the subset fall back along `--ui-font`.
 - Licence: SIL Open Font License 1.1, copyright 2017-2023 Adobe. The full text is in `fonts/OFL.txt` and must stay with the font files.
-- Folio Serif is used for the jacket (title and author), the cover-page title and everything below its divider. Three spots use the system Songti stack (`--font`): the series line and the `CP · …` line on the cover page, and the book title under each shelf jacket. The `CP · …` line only appears when the work has a pairing.
-- Book text is not affected: the reader's text column keeps its own `--font` stack, and so do quoted passages of the book (highlight lists, note editor). `--ui-font` is for interface text only.
+- The bundled serif is used in exactly three places: the title and the author inside every jacket (shelf and cover page), and the bold title on the cover page. Everything else keeps Folio's default fonts: Songti (`--font`) for book text, the titles under the shelf jackets, the cover page's subtitle and `CP · …` line, sheets, menus and dialogs; the system sans (`--default-font`) for body text and buttons. The cover page shows the pairing on its own `CP · …` line between the jacket and the bold title, never inside the jacket. The bundled serif looks the same on every device; the default fonts are the system's own (Songti SC / PingFang on Apple devices, 华文宋体 or 宋体 / 微软雅黑 on Windows).
 - The service worker precaches both files, so the font also works offline.
 
 ## Run locally
@@ -113,6 +113,13 @@ The token is stored only on your devices and inside your own bookmark. Do not sh
 
 A title such as `【亚内】Some Work` carries the pairing in its first full-width bracket pair. `parseBookTitle()` in `ui.js` is the single rule: the cover page shows `CP · 亚内` under the jacket, and every other place (shelf, jacket, reader, contents, dialogs, stats) shows the cleaned name through `bookName()`. The stored title is never rewritten, so the pairing stays in the data and the rule applies to existing and newly imported books alike. Titles without brackets, with empty brackets, or consisting only of a bracket are shown unchanged; further bracket pairs after the first are left in the name.
 
-## Backup export
+## Backup format
 
-On desktop browsers the backup is always a normal file download (`folio-backup-YYYY-MM-DD.json`). The share sheet is used on touch devices only, and a failed share falls back to a download. The file holds every store except `snapshots`, the settings, and the list of empty folders; book titles are saved exactly as stored.
+`folio-backup-YYYY-MM-DD.zip`, format 3:
+
+- `manifest.json`: app and database version, creation time, device, and for every part its record count and checksum
+- `stores/<name>.json`: every database store except book text and internal snapshots. Stores are enumerated, never hard-coded, so data added by later versions is included automatically; blobs, binary data and dates are tagged and restored exactly
+- `books/<id>.json`: one file per book, full text and chapter structure
+- `local.json`: this device's settings (theme, font size, page turn); sync credentials are never included
+
+This is the same split as device sync (one snapshot plus one file per book), so a backup and a synced library are the same data in the same shape. The restore entry also accepts the JSON backups of earlier versions. On phones the file is offered through the share sheet; on computers it is a normal download.

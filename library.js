@@ -37,6 +37,19 @@ function titleShades(color) {
   const hsl = (sat, lig) => `hsl(${Math.round(h * 60)} ${Math.round(sat * 100)}% ${Math.round(lig * 100)}%)`;
   return { dark: hsl(Math.min(.65, Math.max(.4, s)), .14), light: hsl(Math.min(.5, Math.max(.3, s)), .78) };
 }
+// Books saved by older versions may have an empty author list for anonymous works, or
+// spell it differently; the same rule as new imports (normalizeAuthors) is applied to them.
+async function fixAuthors() {
+  const changed = new Map();
+  for (const m of await DB.allMeta()) {
+    const fixed = normalizeAuthors(m.authors, m.source);
+    if (JSON.stringify(fixed) !== JSON.stringify(m.authors || [])) { m.authors = fixed; await DB.putMeta(m); changed.set(m.id, fixed); }
+  }
+  if (!changed.size) return;
+  // Reading history keeps its own copy of the author names
+  const fix = (await DB.allSessions()).filter(s => changed.has(s.bookId));
+  if (fix.length) await DB.putMany('sessions', fix.map(s => ({ ...s, authors: changed.get(s.bookId) })));
+}
 async function balancePalettes() {
   const all = await DB.allMeta();
   const missing = all.filter(m => !Number.isInteger(m.palette));
@@ -255,7 +268,7 @@ function dialog({ title, message = '', input = null, ok = '确定', danger = fal
           ${input !== null ? `<input class="alert-input" value="${esc(input.value || '')}" placeholder="${esc(input.placeholder || '')}" maxlength="${input.max || 80}">` : ''}
         </div>
         <div class="alert-actions">
-          <button data-r="0">取消</button>
+          ${ok === '好' && input === null ? '' : '<button data-r="0">取消</button>'}
           <button data-r="1" class="${danger ? 'danger' : 'strong'}">${esc(ok)}</button>
         </div>
       </div>`;
@@ -313,8 +326,20 @@ const Library = {
     if (rerender) await this.render();
   },
   // Empty folders made from the shelf are remembered here; a book's own folder name is never touched
-  extraFolders() { try { return JSON.parse(localStorage.getItem('folio-folders') || '[]').filter(x => x && typeof x === 'string'); } catch { return []; } },
-  saveExtraFolders(list) { try { localStorage.setItem('folio-folders', JSON.stringify([...new Set(list)])); } catch { /* storage blocked */ } },
+  // Folders created before any book is in them. Kept in the database (prefs 'folders') so they
+  // are synced and backed up; older versions kept them in localStorage and are moved over once.
+  _extra: [],
+  async loadExtraFolders() {
+    let list = await DB.getPref('folders');
+    if (!Array.isArray(list)) {
+      try { list = JSON.parse(localStorage.getItem('folio-folders') || '[]'); } catch { list = []; }
+      await DB.setPref('folders', list.filter(x => x && typeof x === 'string'));
+      localStorage.removeItem('folio-folders');
+    }
+    this._extra = list.filter(x => x && typeof x === 'string');
+  },
+  extraFolders() { return [...this._extra]; },
+  saveExtraFolders(list) { this._extra = [...new Set(list)]; DB.setPref('folders', this._extra); },
   folders() { return [...new Set([...this.books.map(b => b.folder).filter(Boolean), ...this.extraFolders()])].sort((a, b) => a.localeCompare(b, 'zh')); },
   async createFolder() {
     const f = await promptDialog({ title: '新建文件夹', placeholder: '文件夹名称', ok: '创建' });
@@ -343,6 +368,8 @@ const Library = {
   // ---------- rendering ----------
   async render() {
     await balancePalettes();                 // books without a colour yet get one (saved with the book)
+    await fixAuthors();                      // one spelling for anonymous works (see importer.js)
+    await this.loadExtraFolders();
     this.books = await DB.allMeta();
     const folders = this.folders(), tags = this.tags();
     if (this.filter !== 'all' && !(this.filter.startsWith('f:') ? folders.includes(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';

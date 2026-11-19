@@ -42,6 +42,7 @@ const Importer = {
   },
   finish(book) {
     book.id = 'b-' + hash(book.source || book.title + '|' + book.authors.join(','));
+    book.authors = normalizeAuthors(book.authors, book.source);
     return book;
   },
 
@@ -50,9 +51,29 @@ const Importer = {
     const book = isTxt ? parseTxt(text, name) : parseHtml(text, name);
     // Stable id: re-importing the same book replaces it and keeps reading progress
     book.id = 'b-' + hash(book.source || book.title + '|' + book.authors.join(','));
+    book.authors = normalizeAuthors(book.authors, book.source);    // after the id, which must stay stable
     return book;
   },
 };
+
+// Author names, the same way for every import channel (HTML export, work page, EPUB, PDF,
+// TXT, the bookmark's inbox):
+//   • whitespace tidied, empty names dropped, duplicates removed
+//   • "anonymous" in any capitalisation is the author "Anonymous", a real name like any other
+//   • a work that came from a work page (its source is a /works/ link) but names no author was
+//     posted anonymously, so it is "Anonymous" too. Books with no source and no author (a TXT
+//     file, say) stay without one: their author is unknown, not anonymous.
+function normalizeAuthors(list, source) {
+  const out = [];
+  for (const raw of list || []) {
+    let a = String(raw ?? '').replace(/\s+/g, ' ').replace(/^by\s+/i, '').trim();
+    if (!a) continue;
+    if (/^anonymous$/i.test(a)) a = 'Anonymous';
+    if (!out.includes(a)) out.push(a);
+  }
+  if (!out.length && /\/works\/\d+/.test(source || '')) out.push('Anonymous');
+  return out;
+}
 
 // ---------- Encoding: try strict UTF-8, fall back to GB18030 (superset of GBK) ----------
 function decodeText(buf) {
