@@ -147,14 +147,16 @@
     if (!blocked) {
       try {
         const file = w.b64 ? `in-${w.id}.${w.ext}.b64` : `in-${w.id}.html`;              // one file per work: never twice
-        await api('PATCH', { files: { [file]: { content: w.b64 ? w.name + '\n' + w.b64 : w.html } } });   // a file: its name on the first line
+        // A file: one line of JSON (file name and what the page says about the book), then the file
+        const head = JSON.stringify({ name: w.name, meta: w.meta || null });
+        await api('PATCH', { files: { [file]: { content: w.b64 ? head + '\n' + w.b64 : w.html } } });
         return true;
       } catch (e) {
         if (!(e instanceof TypeError)) throw e;      // TypeError = the request never left the page
         blocked = true;
       }
     }
-    held.push(w.b64 ? { id: w.id, name: w.name, b64: w.b64 } : { id: w.id, html: w.html });
+    held.push(w.b64 ? { id: w.id, name: w.name, meta: w.meta, b64: w.b64 } : { id: w.id, html: w.html });
     return false;
   }
   let shelf = null;
@@ -176,7 +178,7 @@
     if (held.length) {
       say(`已抓好 ${held.length} 篇，但没能连到 GitHub（网络不稳，或这个网站不让页面连出去）。\n网络恢复后再点一次书签就能接着送；也可以点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
       buttons([['复制', async () => {
-        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => h.b64 ? { name: h.name, b64: h.b64 } : { html: h.html }) }));
+        await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => h.b64 ? { name: h.name, meta: h.meta, b64: h.b64 } : { html: h.html }) }));
         const job = loadJob();
         if (job) { job.done.push(...held.map(h => h.id)); job.done.length >= job.ids.length ? saveJob(null) : saveJob(job); }
         say('已复制，打开 Folio 粘贴吧');
@@ -322,24 +324,66 @@
     }
     return out;
   }
+  // What the page says about the book, from the common ways sites describe one: schema.org
+  // data (JSON-LD or itemprop), Open Graph / book meta tags, then plain page elements
+  function pageMeta() {
+    const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+    const meta = sel => clean(document.querySelector(sel)?.getAttribute('content'));
+    let ld = {};
+    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const all = [].concat(JSON.parse(s.textContent)).flatMap(x => x['@graph'] || [x]);
+        const b = all.find(x => /Book|CreativeWork|Novel/.test([].concat(x['@type']).join(' ')));
+        if (b) { ld = b; break; }
+      } catch { /* not JSON */ }
+    }
+    const names = v => [].concat(v || []).map(a => clean(typeof a === 'string' ? a : a?.name)).filter(Boolean);
+    const authors = names(ld.author).length ? names(ld.author)
+      : [...document.querySelectorAll('[itemprop="author"], [itemprop="creator"], a[rel="author"]')].map(e => clean(e.getAttribute('content') || e.textContent)).filter(Boolean).slice(0, 4);
+    const fallbackAuthor = meta('meta[name="author"]') || meta('meta[property="book:author"]') || meta('meta[property="og:book:author"]');
+    const image = [].concat(ld.image || [])[0];
+    const cover = (typeof image === 'string' ? image : image?.url) || meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]')
+      || document.querySelector('[itemprop="image"]')?.getAttribute('src') || document.querySelector('img[class*="cover" i]')?.getAttribute('src') || '';
+    return {
+      title: clean(ld.name) || meta('meta[property="og:title"]') || clean(document.querySelector('[itemprop="name"]')?.textContent) || clean(document.querySelector('h1')?.textContent) || clean(document.title),
+      authors: authors.length ? [...new Set(authors)] : fallbackAuthor ? [fallbackAuthor] : [],
+      summary: clean(ld.description) || meta('meta[property="og:description"]') || meta('meta[name="description"]') || clean(document.querySelector('[itemprop="description"]')?.textContent),
+      cover: cover ? new URL(cover, location.href).href : '',
+      url: location.href.split('#')[0],
+    };
+  }
+  // The cover picture, if this page is allowed to read it (most sites serve their own images)
+  async function coverData(url) {
+    if (!url) return '';
+    try {
+      const r = await fetch(url, { credentials: 'include' });
+      if (!r.ok || !/^image\//.test(r.headers.get('content-type') || '')) return '';
+      const blob = await r.blob();
+      if (blob.size > 1.5 * 1048576) return '';
+      return await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(''); fr.readAsDataURL(blob); });
+    } catch { return ''; }
+  }
+
   function pickFiles(list) {
-    const title = (document.querySelector('h1')?.textContent || document.title).replace(/\s+/g, ' ').trim().slice(0, 80);
+    const info = pageMeta();
+    const title = info.title.slice(0, 80);
     // One copy of the book is enough: EPUB first, then TXT, then the rest
     const order = ['epub', 'txt', 'html', 'pdf', 'zip'];
     const first = [...list].sort((a, b) => order.indexOf(a.ext) - order.indexOf(b.ext))[0];
     const picked = new Set([first.url]);
     const draw = () => {
-      say(`这一页有 ${list.length} 个电子书文件，选要送到 Folio 的：\n` + list.map((f, i) => `${picked.has(f.url) ? '☑' : '☐'} ${i + 1}. ${f.ext.toUpperCase()} · ${f.label.slice(0, 30)}`).join('\n'));
+      say(`《${title.slice(0, 24)}》${info.authors.length ? ' · ' + info.authors.join('、').slice(0, 20) : ''}\n这一页有 ${list.length} 个电子书文件，选要送到 Folio 的：\n` + list.map((f, i) => `${picked.has(f.url) ? '☑' : '☐'} ${i + 1}. ${f.ext.toUpperCase()} · ${f.label.slice(0, 30)}`).join('\n'));
       buttons([
         ...list.slice(0, 6).map((f, i) => [`${picked.has(f.url) ? '✓ ' : ''}${i + 1}`, () => { picked.has(f.url) ? picked.delete(f.url) : picked.add(f.url); draw(); }]),
-        [`送出 ${picked.size} 个`, () => picked.size && sendFiles(list.filter(f => picked.has(f.url)), title), true],
+        [`送出 ${picked.size} 个`, () => picked.size && sendFiles(list.filter(f => picked.has(f.url)), title, info), true],
       ]);
     };
     draw();
   }
-  async function sendFiles(files, title) {
+  async function sendFiles(files, title, info = {}) {
     buttons([]);
     keepAwake(true);
+    const meta = { ...info, cover: await coverData(info.cover) };
     let sent = 0;
     const errors = [];
     for (const [i, f] of files.entries()) {
@@ -355,9 +399,9 @@
         let h = 0x811c9dc5;
         for (const c of f.url) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193); }
         const name = (title || 'book').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60) + '.' + f.ext;
-        if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, b64: btoa(bin) })) sent++;
+        if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, meta, b64: btoa(bin) })) sent++;
       } catch (e) {
-        errors.push(e instanceof TypeError ? '这个网站不允许页面下载文件（跨站限制），请手动下载后导入' : e.message);
+        errors.push(e instanceof TypeError ? '这个网站不允许页面下载这个文件（下载地址在别的网站上），请手动下载后导入' : e.message);
       }
     }
     keepAwake(false);

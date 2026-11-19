@@ -37,7 +37,10 @@ const Importer = {
       return [{ book: this.parseText(text, base, ext === 'txt'), label }];
     } catch (err) {
       console.error(err);
-      return [{ error: err.message, label }];
+      // pdf.js reports in English; say it plainly
+      const msg = err?.name === 'InvalidPDFException' || /Invalid PDF|PDF header/i.test(err?.message || '') ? '不是有效的 PDF 文件'
+        : err?.name === 'PasswordException' ? '这个 PDF 有密码保护，Folio 打不开' : err.message;
+      return [{ error: msg, label }];
     }
   },
   finish(book) {

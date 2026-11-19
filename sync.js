@@ -40,6 +40,8 @@ const Sync = {
 
   // Called after every local database write
   touched(store, id) {
+    if (store === 'device' || store === 'snapshots') return;     // this device's own records: neither synced nor backed up
+    if (typeof CloudBackup !== 'undefined') CloudBackup.mark(); // any change, local or pulled, goes into the cloud backup
     if (this.applying) return;
     this.rev++;
     this.st.dirty = true;
@@ -138,7 +140,7 @@ const Sync = {
     this.applying = true;
     try {
       for (const [name, rows] of Object.entries(remote.stores || {})) {
-        if (name !== 'contents' && name !== 'snapshots' && names.includes(name)) await DB.replace(name, rows);
+        if (name !== 'contents' && name !== 'snapshots' && name !== 'device' && names.includes(name)) await DB.replace(name, rows);
       }
       for (const b of books) await DB.putContent(b);
       for (const id of localIds) {
@@ -152,6 +154,7 @@ const Sync = {
       dirty: false, pending: [], lastSync: Date.now(), lastFrom: remote.device,
     });
     this.save();
+    CloudBackup.mark();                               // the pulled library is what the cloud backup should hold
     await Library.render();
     toast(`已同步${remote.device ? '「' + remote.device + '」' : ''}的书架`);
   },
@@ -159,7 +162,7 @@ const Sync = {
   // Upload the local library as the new snapshot
   async push(remote) {
     const rev0 = this.rev;
-    const names = (await DB.storeNames()).filter(n => n !== 'contents' && n !== 'snapshots');
+    const names = (await DB.storeNames()).filter(n => n !== 'contents' && n !== 'snapshots' && n !== 'device');
     const stores = {};
     for (const n of names) stores[n] = await DB.dump(n);
     const ids = new Set((stores.meta || []).map(m => m.id));
@@ -225,7 +228,7 @@ const Sync = {
     // A few at a time, each group removed from the inbox right after it is saved (and uploaded),
     // so an interruption never loses a work and never imports more than the last group twice
     // (and importing a book again only updates it).
-    const total = { count: 0, updated: 0, added: 0 };
+    const total = { count: 0, updated: 0, added: 0, same: 0 };
     let kept = 0, unsynced = 0, skipped = 0;
     for (let i = 0; i < names.length; i += 5) {
       const group = names.slice(i, i + 5), sources = [];
@@ -234,10 +237,14 @@ const Sync = {
         if (!text) { skipped++; continue; }
         if (n.endsWith('.b64')) {                     // an e-book file (EPUB, PDF, TXT…) sent by the bookmark
           const ext = n.replace(/\.b64$/, '').split('.').pop();
-          const cut = text.indexOf('\n'), fname = cut > 0 ? text.slice(0, cut).trim() : '收到的作品.' + ext;
+          // First line: JSON { name, meta } (or, from older bookmarks, just the file name)
+          const cut = text.indexOf('\n'), head = cut > 0 ? text.slice(0, cut).trim() : '';
+          let fname = '收到的作品.' + ext, meta = null;
+          if (head.startsWith('{')) { try { ({ name: fname = fname, meta = null } = JSON.parse(head)); } catch { /* keep defaults */ } }
+          else if (head) fname = head;
           const bin = atob(text.slice(cut + 1).trim()), bytes = new Uint8Array(bin.length);
           for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-          for (const r of await Importer.parseFile(new Blob([bytes]), fname)) {
+          for (const r of await booksFromFile(new Blob([bytes]), fname, meta)) {
             if (r.book) sources.push({ book: r.book, label: bookName(r.book.title) }); else skipped++;
           }
         } else { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: bookName(book.title) }); }
@@ -249,7 +256,7 @@ const Sync = {
       if (retry) kept += retry;
       else if (!this.on || await this.savedToCloud()) await this.patch(this.st.inbox, Object.fromEntries(group.map(n => [n, null])));
       else unsynced += group.length;                 // saved here, not yet uploaded: stays in the inbox too
-      for (const k in total) total[k] += res[k];
+      for (const k in total) total[k] += res[k] || 0;
     }
     const msg = [];
     if (kept) msg.push(`有 ${kept} 篇没能保存，先留在收件箱，下次打开再试`);
@@ -362,6 +369,7 @@ const Sync = {
       <p class="sync-note">本机：${esc(this.st.device)} · ${esc(this.summary())}</p>
       <div class="pk-list">
         <button class="pk-row" data-a="now"><span>立即同步</span></button>
+        <button class="pk-row" data-a="cloud"><span>云端自动备份</span><small>${esc(CloudBackup.summary())}</small></button>
         <button class="pk-row" data-a="bm"><span>网页收书书签</span><small>在网站上一点就进书架</small></button>
         <button class="pk-row" data-a="name"><span>本机名称</span><small>${esc(this.st.device)}</small></button>
         <button class="pk-row muted" data-a="off"><span>断开同步</span></button>
@@ -373,6 +381,8 @@ const Sync = {
       if (a === 'now') {
         await this.check();
         toast(this.st.error ? '同步失败：' + this.st.error : '已是最新');
+      } else if (a === 'cloud') {
+        CloudBackup.openPanel();
       } else if (a === 'bm') {
         this.showBookmarklet();
       } else if (a === 'name') {

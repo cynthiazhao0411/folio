@@ -936,6 +936,7 @@ const Library = {
       if (act === 'cover-set') { close(); return this.pickCover(ids); }
       if (act === 'imp-file') { close(); return document.getElementById('picker').click(); }   // must stay inside the tap
       if (act === 'imp-paste') { close(); return importFromClipboard(); }
+      if (act === 'imp-folder') { close(); return Downloads.collect(); }   // inside the tap: the folder permission may need asking
       await close();
       const done = await this.run(act, ids);
       if (done !== false) this.exitSelect();

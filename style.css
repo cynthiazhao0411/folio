@@ -923,3 +923,11 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 /* Backup sheets */
 .bk-sum { margin: .2em 1.4em .9em; font-size: .84em; line-height: 1.9; text-align: center; color: var(--fg); }
 .bk-spin { width: 26px; height: 26px; margin: .6em auto 1.6em; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+
+/* Drag and drop onto the shelf */
+.drop-veil { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); pointer-events: none; }
+.drop-veil.hidden { display: none; }
+.drop-card { padding: 1.6em 2.6em; border: 2px dashed var(--accent); border-radius: 22px; background: var(--card);
+  font-family: var(--font); font-size: 1.2em; letter-spacing: .2em; color: var(--accent); text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.12); }
+.drop-card small { display: block; font-family: var(--default-font); margin-top: .6em; font-size: .62em; letter-spacing: .05em; color: var(--muted); }

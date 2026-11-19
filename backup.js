@@ -20,7 +20,7 @@ const Backup = {
   FORMAT: 3,
   UNDO: 'undo-restore',
   // localStorage keys that belong to this device only: never backed up, never restored
-  DEVICE_ONLY: /^folio-(sync|backup-at|backup-asked|collect-job)/,
+  DEVICE_ONLY: /^folio-(sync|cloud|backup-at|backup-asked|collect-job)/,
 
   // ---------- values that JSON cannot hold (blobs, bytes, dates) ----------
   async pack(v) {
@@ -79,30 +79,31 @@ const Backup = {
       + `${s.sessions} 次阅读记录 · ${s.days} 天的阅读时长`;
   },
 
-  // ---------- export ----------
-  async create() {
-    const enc = new TextEncoder(), files = [];
+  // ---------- the backup's parts (shared by the ZIP file and the cloud backup) ----------
+  // Returns the manifest plus every part as text with its checksum. `skipBook(id)` may return a
+  // part already known (the cloud backup uses it to avoid re-reading unchanged book text).
+  async parts(skipBook) {
     const manifest = {
       app: 'folio-backup', format: this.FORMAT, db: DB.VERSION,
       appVersion: document.querySelector('.app-version')?.textContent.replace(/^\D+/, '') || '',
       createdAt: Date.now(), device: Sync.st?.device || '',
       stores: {}, books: {}, local: {},
     };
-    const stores = {};
+    const stores = {}, storeText = {};
     for (const name of await DB.storeNames()) {
-      if (name === 'contents' || name === 'snapshots') continue;
+      if (name === 'contents' || name === 'snapshots' || name === 'device') continue;
       stores[name] = await DB.dump(name);
-      const text = JSON.stringify(await this.pack(stores[name]));
-      manifest.stores[name] = { count: stores[name].length, hash: this.hash(text) };
-      files.push({ name: `stores/${name}.json`, data: enc.encode(text) });
+      storeText[name] = JSON.stringify(await this.pack(stores[name]));
+      manifest.stores[name] = { count: stores[name].length, hash: this.hash(storeText[name]) };
     }
-    const books = [];
+    const books = [], bookText = {};
     for (const id of await DB.keys('contents')) {
+      const known = skipBook?.(id, stores.meta?.find(m => m.id === id));
+      if (known) { manifest.books[id] = known; continue; }
       const c = await DB.getContent(id);
       books.push(c);
-      const text = JSON.stringify(await this.pack(c));
-      manifest.books[id] = { hash: this.hash(text), chapters: c.chapters?.length || 0 };
-      files.push({ name: `books/${encodeURIComponent(id)}.json`, data: enc.encode(text) });
+      bookText[id] = JSON.stringify(await this.pack(c));
+      manifest.books[id] = { hash: this.hash(bookText[id]), chapters: c.chapters?.length || 0 };
     }
     const local = {};
     for (let i = 0; i < localStorage.length; i++) {
@@ -111,6 +112,15 @@ const Backup = {
     }
     const localText = JSON.stringify(local);
     manifest.local = { count: Object.keys(local).length, hash: this.hash(localText) };
+    return { manifest, stores, storeText, books, bookText, local, localText };
+  },
+
+  // ---------- export ----------
+  async create() {
+    const enc = new TextEncoder(), files = [];
+    const { manifest, stores, storeText, books, bookText, local, localText } = await this.parts();
+    for (const name in storeText) files.push({ name: `stores/${name}.json`, data: enc.encode(storeText[name]) });
+    for (const id in bookText) files.push({ name: `books/${encodeURIComponent(id)}.json`, data: enc.encode(bookText[id]) });
     files.push({ name: 'local.json', data: enc.encode(localText) });
     manifest.summary = this.summarize(stores, books);
     files.unshift({ name: 'manifest.json', data: enc.encode(JSON.stringify(manifest, null, 1)) });
@@ -181,12 +191,13 @@ const Backup = {
     const unknown = Object.keys(data.stores).filter(n => !names.includes(n));
     // 1. Copy the current data aside first, so the restore can be undone
     const undo = { id: this.UNDO, at: Date.now(), stores: {}, local: {} };
-    for (const n of names) if (n !== 'snapshots') undo.stores[n] = await DB.dump(n);
+    for (const n of names) if (n !== 'snapshots' && n !== 'device') undo.stores[n] = await DB.dump(n);
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!this.DEVICE_ONLY.test(k)) undo.local[k] = localStorage.getItem(k); }
     await DB.run('snapshots', 'readwrite', s => s.put(undo));
 
     // 2. Write
     const write = { ...data.stores, contents: data.books };
+    delete write.device; delete write.snapshots;                 // this device's own records never come from a backup
     for (let [name, rows] of Object.entries(write)) {
       if (!names.includes(name)) continue;
       if (mode === 'replace') { await DB.replace(name, rows); continue; }
@@ -197,7 +208,7 @@ const Backup = {
       await DB.putMany(name, rows);
     }
     if (mode === 'replace') {                                    // stores the backup does not have (it is older): leave empty
-      for (const n of names) if (!(n in write) && n !== 'snapshots') await DB.replace(n, []);
+      for (const n of names) if (!(n in write) && n !== 'snapshots' && n !== 'device') await DB.replace(n, []);
     }
     for (const [k, v] of Object.entries(data.local || {})) if (!this.DEVICE_ONLY.test(k)) localStorage.setItem(k, v);
 
@@ -220,7 +231,7 @@ const Backup = {
     const snap = await DB.run('snapshots', 'readonly', s => s.get(this.UNDO));
     if (!snap) throw new Error('没有可以撤销的恢复');
     const names = await DB.storeNames();
-    for (const n of names) if (n !== 'snapshots') await DB.replace(n, snap.stores[n] || []);
+    for (const n of names) if (n !== 'snapshots' && n !== 'device') await DB.replace(n, snap.stores[n] || []);
     for (const [k, v] of Object.entries(snap.local || {})) localStorage.setItem(k, v);
     await DB.run('snapshots', 'readwrite', s => s.delete(this.UNDO));
     if (Sync.st) Sync.st.hashes = {};

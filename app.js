@@ -290,13 +290,13 @@ function progressToast() {
 // fails the book is rolled back (or its previous version restored), so the shelf never holds a
 // record without text, and the numbers reported always match what is really on the shelf.
 async function importBooks(sources, open = true, onProgress) {
-  let lastId = null, count = 0, updated = 0;
+  let lastId = null, count = 0, updated = 0, same = 0;
   const failed = [];
   for (const [i, { book, label }] of sources.entries()) {
     onProgress?.(i + 1, sources.length);
-    if (!book.chapters.length) { failed.push({ label, error: '没有读到正文' }); continue; }
+    if (!book.chapters.length) { failed.push({ file: sources[i].file, label, error: '没有读到正文' }); continue; }
     const words = bookText(book.chapters);
-    if (words < MIN_TEXT) { failed.push({ label, error: '内容是空的或文字太少' }); continue; }
+    if (words < MIN_TEXT) { failed.push({ file: sources[i].file, label, error: '内容是空的或文字太少' }); continue; }
     let old = null, oldContent = null;
     try {
       old = await DB.getMeta(book.id);
@@ -330,6 +330,7 @@ async function importBooks(sources, open = true, onProgress) {
       const [m, c] = await Promise.all([DB.getMeta(book.id), DB.getContent(book.id)]);   // read back to be sure
       if (!m || !c?.chapters?.length) throw new Error('写入后读不到，没有保存成功');
       if (old) updated++;
+      if (old && old.chapterCount === chapters.length && old.words === words) same++;   // already on the shelf, nothing changed
       lastId = book.id; count++;
     } catch (err) {
       console.error(err);
@@ -337,15 +338,21 @@ async function importBooks(sources, open = true, onProgress) {
         if (old) { if (oldContent) await DB.putContent(oldContent); await DB.putMeta(old); }
         else await DB.remove(book.id);
       } catch (e2) { console.error('rollback failed', e2); }
-      failed.push({ label, error: importError(err), retry: true });   // storage problem: worth trying again
+      failed.push({ file: sources[i].file, label, error: importError(err), retry: true });   // storage problem: worth trying again
     }
   }
   try { await renderShelf(); } catch (err) { console.error(err); }
   if (count === 1 && open && !failed.length) openBook(lastId);  // open right away when a single book comes in
-  return { count, updated, added: count - updated, failed };
+  return { count, updated, same, added: count - updated, failed };
 }
-const importSummary = r => r.updated && r.added ? `新增 ${r.added} 本 · 更新 ${r.updated} 本`
-  : r.updated ? `更新了 ${r.updated} 本` : `新增 ${r.added} 本`;
+// "新增 2 本 · 更新 1 本 · 3 本已在书架（没有变化）"
+const importSummary = r => {
+  const parts = [];
+  if (r.added) parts.push(`新增 ${r.added} 本`);
+  if (r.updated - (r.same || 0) > 0) parts.push(`更新 ${r.updated - (r.same || 0)} 本`);
+  if (r.same) parts.push(`${r.same} 本已在书架（没有变化）`);
+  return parts.join(' · ') || '没有新书';
+};
 
 // One honest report for every import: what really went onto the shelf and what did not
 function reportImport(res, failed) {
@@ -359,36 +366,70 @@ function reportImport(res, failed) {
   });
 }
 
-document.getElementById('picker').addEventListener('change', async e => {
-  const files = [...e.target.files];
-  e.target.value = '';
-  if (!files.length) return;
+// Import a list of files (picker, drag and drop, downloads folder). Each file stands alone:
+// one that cannot be read or saved never stops the others. Returns the files that made it.
+async function importFileList(files, { open = true, reportDone = true } = {}) {
   const progress = progressToast();
+  const ok = new Set(files);
   try {
     const sources = [], parseFailed = [];
     for (const [i, file] of files.entries()) {
-      progress.set(files.length > 1 ? `正在读取 ${i + 1} / ${files.length}…` : '正在读取…');
-      for (const r of await Importer.parseFile(file)) (r.error ? parseFailed : sources).push(r);
+      progress.set(files.length > 1 ? `正在读取 ${i + 1} / ${files.length}：${file.name}` : '正在读取…');
+      for (const r of await Importer.parseFile(file)) {
+        if (r.error) { parseFailed.push(r); ok.delete(file); } else sources.push({ ...r, file });
+      }
     }
-    const res = await importBooks(sources, sources.length === 1 && !parseFailed.length,
+    const res = await importBooks(sources, open && sources.length === 1 && !parseFailed.length,
       (i, n) => progress.set(n > 1 ? `正在导入 ${i} / ${n}…` : '正在导入…'));
+    for (const f of res.failed) ok.delete(f.file);
     progress.done();
-    reportImport(res, [...parseFailed, ...res.failed]);
+    if (reportDone) reportImport(res, [...parseFailed, ...res.failed]);
+    return { res, ok, failed: [...parseFailed, ...res.failed] };
   } catch (err) {
     console.error(err);
     progress.done();
     dialog({ title: '导入出错', message: importError(err), ok: '好' });
+    return { res: null, ok: new Set(), failed: [] };
   }
+}
+
+document.getElementById('picker').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (files.length) importFileList(files);
 });
 
 // The 导入 button offers two ways in: a file, or a work copied to the clipboard
 document.getElementById('btn-import').onclick = e => {
-  Library.popover(e.currentTarget, [['imp-file', '从文件导入'], ['imp-paste', '粘贴剪贴板里的作品']], [], true);
+  const items = [['imp-file', '从文件导入'], ['imp-paste', '粘贴作品或链接']];
+  if (Downloads.supported()) items.push(['imp-folder', '从下载文件夹收书']);
+  Library.popover(e.currentTarget, items, [], true);
 };
+// A pasted link: collect the book straight from the site when the site allows it (links.js)
+async function importFromLink(link) {
+  const progress = progressToast();
+  try {
+    const r = await LinkImport.collect(link, msg => progress.set(msg));
+    progress.done();
+    if (r.blocked) {
+      return dialog({ title: '这个网站不让 Folio 直接读取', ok: '好',
+        message: `${r.blocked} 不允许别的网页读取它的内容，所以 Folio 不能从链接直接收书。\n\n请在浏览器里打开这个网页，点「Folio 收书」书签：在网站自己的页面上，能下载的电子书文件会列出来，选好就送进书架。也可以先下载文件，再从「导入」里选它。` });
+    }
+    if (r.error) return dialog({ title: '没能收书', message: r.error, ok: '好' });
+    const res = await importBooks(r.sources, r.sources.length === 1 && !r.failed.length);
+    if (r.failed.length) dialog({ title: '有文件没能导入', message: r.failed.map(f => `${f.label}：${f.error}`).join('\n'), ok: '好' });
+    else if (res.count !== 1) toast(importSummary(res));
+  } catch (err) {
+    progress.done();
+    dialog({ title: '没能收书', message: err.message, ok: '好' });
+  }
+}
+
 async function importFromClipboard() {
   let text = '';
   try { text = await navigator.clipboard.readText(); } catch { return toast('没有读取剪贴板的权限'); }
-  if (!text || text.length < 200) return toast('剪贴板里没有作品内容');
+  if (/^\s*https?:\/\/\S+\s*$/.test(text || '')) return importFromLink(text.trim());
+  if (!text || text.length < 200) return toast('剪贴板里没有作品内容或链接');
   const progress = progressToast();
   try {
     const sources = [], parseFailed = [];
@@ -399,7 +440,7 @@ async function importFromClipboard() {
         if (it.b64) {                                // an e-book file copied by the bookmark
           const bin = atob(it.b64), bytes = new Uint8Array(bin.length);
           for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-          for (const r of await Importer.parseFile(new Blob([bytes]), it.name || 'book.epub')) {
+          for (const r of await booksFromFile(new Blob([bytes]), it.name || 'book.epub', it.meta)) {
             if (r.book) sources.push({ book: r.book, label: bookName(r.book.title) }); else parseFailed.push({ label: r.label, error: r.error });
           }
         } else { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: bookName(book.title) }); }
@@ -544,6 +585,11 @@ document.getElementById('restore-picker').addEventListener('change', async e => 
   let data;
   try { data = await Backup.read(file); }
   catch (err) { return dialog({ title: '无法恢复', message: err.message, ok: '好' }); }
+  restoreFlow(data);
+});
+
+// Show what a backup holds, ask merge or replace, restore, report (used for files and the cloud)
+async function restoreFlow(data) {
   const sum = Backup.summarize(data.stores, data.books);
   const when = data.manifest.createdAt ? new Date(data.manifest.createdAt).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
   const mode = await new Promise(resolve => {
@@ -577,7 +623,7 @@ document.getElementById('restore-picker').addEventListener('change', async e => 
     await renderShelf();
     dialog({ title: '恢复没有完成', message: err.message, ok: '好' });
   }
-});
+}
 
 document.getElementById('btn-undo-restore').onclick = async () => {
   await Sheet.close(moreSheet);
@@ -598,6 +644,7 @@ navigator.storage?.persist?.();
 
 renderShelf();
 Sync.init();
+CloudBackup.init();
 
 // Without device sync, the data lives only on this device: a gentle weekly reminder to back up
 setTimeout(async () => {

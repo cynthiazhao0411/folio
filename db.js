@@ -9,6 +9,8 @@
 //   prefs    user data that is not about one book: { key, value } (e.g. key 'folders' = folders
 //            created before any book is in them). Synced and backed up like everything else.
 //   snapshots copies of the data taken right before a database upgrade or a restore (never synced)
+//   device   things that belong to this device only, e.g. the permission to read a downloads
+//            folder ({ key, value }). Never synced, never in a backup.
 //
 // Upgrades only ever add stores and fields; nothing is deleted. Each upgrade first copies
 // the existing records into `snapshots`, inside the same transaction, so a failed or
@@ -21,7 +23,7 @@ const DB = {
   open() {
     if (this._db) return Promise.resolve(this._db);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('folio', 5);
+      const req = indexedDB.open('folio', 6);
       req.onupgradeneeded = e => {            // runs on first launch and when the version number goes up
         const db = req.result, tx = req.transaction, has = n => db.objectStoreNames.contains(n);
         const old = e.oldVersion;
@@ -36,6 +38,7 @@ const DB = {
         }
         if (!has('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
         if (!has('prefs')) db.createObjectStore('prefs', { keyPath: 'key' });
+        if (!has('device')) db.createObjectStore('device', { keyPath: 'key' });
         if (old > 0) DB.migrate(tx, old);
       };
       req.onsuccess = () => resolve(this._db = req.result);
@@ -74,11 +77,14 @@ const DB = {
       }
     };
   },
-  VERSION: 5,
+  VERSION: 6,
 
   // Small pieces of user data that are not about one book
   async getPref(key) { return (await this.run('prefs', 'readonly', s => s.get(key)))?.value; },
   setPref(key, value) { return this.run('prefs', 'readwrite', s => s.put({ key, value })); },
+  async getDevice(key) { return (await this.run('device', 'readonly', s => s.get(key)))?.value; },
+  setDevice(key, value) { return this.run('device', 'readwrite', s => s.put({ key, value })); },
+  delDevice(key) { return this.run('device', 'readwrite', s => s.delete(key)); },
 
   // Many rows in one transaction (one onWrite call for the whole batch)
   async putMany(store, rows) {
