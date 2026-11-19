@@ -69,6 +69,15 @@ function hash(s) {
 
 const txt = el => (el ? el.textContent.trim() : '');
 
+// Authors from a byline. Linked authors come first; an unlinked byline (anonymous works have
+// no author link) is read as plain text, so "Anonymous" is kept like any other author name.
+function bylineAuthors(root) {
+  const linked = [...(root?.querySelectorAll('.byline a[rel="author"]') || [])].map(txt).filter(Boolean);
+  if (linked.length) return linked;
+  const plain = txt(root?.querySelector('.byline')).replace(/^\s*by\s+/i, '').trim();
+  return plain ? [plain] : [];
+}
+
 // ---------- HTML ----------
 function parseHtml(html, fallbackTitle) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -90,7 +99,7 @@ function parseHtml(html, fallbackTitle) {
 function parseWorkPage(doc) {
   const pre = doc.querySelector('.preface.group');
   const title = txt(pre?.querySelector('h2.title')) || txt(doc.querySelector('title'));
-  const authors = [...(pre?.querySelectorAll('.byline a[rel="author"]') || [])].map(txt);
+  const authors = bylineAuthors(pre);
   const summary = pre?.querySelector('.summary blockquote')?.innerHTML || '';
 
   const tags = {};
@@ -152,7 +161,7 @@ function parseWorkPage(doc) {
 function parseStructured(doc) {
   const preface = doc.querySelector('#preface');
   const title = txt(preface.querySelector('.meta h1')) || txt(doc.querySelector('title'));
-  const authors = [...preface.querySelectorAll('.byline a[rel="author"]')].map(txt);
+  const authors = bylineAuthors(preface);
   const summary = preface.querySelector('blockquote')?.innerHTML || '';
 
   const tags = {};

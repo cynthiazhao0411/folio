@@ -18,6 +18,25 @@ function coverColor(key) {
 // the first time, the whole shelf is shuffled evenly; after that, a new book gets one of
 // the least-used colours.
 function bookColor(b) { return Number.isInteger(b.palette) ? COVER_COLORS[b.palette % COVER_COLORS.length] : coverColor(b.id || b.title); }
+// Cover-page title colour: the jacket colour pushed to a very dark shade of the same hue (a light
+// tint on the night theme), so a purple jacket gives a deep purple title, a blue one a deep blue.
+function titleShades(color) {
+  const m = String(color || '').match(/^#([0-9a-f]{6})$/i) || String(color || '').match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+  let r, g, b;
+  if (m && m.length === 2) [r, g, b] = [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16) / 255);
+  else if (m) [r, g, b] = [1, 2, 3].map(i => parseInt(m[i] + m[i], 16) / 255);
+  else {
+    const n = String(color || '').match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+    if (!n) return null;
+    [r, g, b] = [1, 2, 3].map(i => +n[i] / 255);
+  }
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min, l = (max + min) / 2;
+  let h = 0;
+  if (d) h = max === r ? ((g - b) / d + (g < b ? 6 : 0)) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const s = d ? d / (1 - Math.abs(2 * l - 1)) : 0;
+  const hsl = (sat, lig) => `hsl(${Math.round(h * 60)} ${Math.round(sat * 100)}% ${Math.round(lig * 100)}%)`;
+  return { dark: hsl(Math.min(.65, Math.max(.4, s)), .14), light: hsl(Math.min(.5, Math.max(.3, s)), .78) };
+}
 async function balancePalettes() {
   const all = await DB.allMeta();
   const missing = all.filter(m => !Number.isInteger(m.palette));
@@ -40,6 +59,8 @@ const metaGroup = (b, re) => { const k = Object.keys(b.tags || {}).find(k => re.
 function coverSubtitle(b) {
   return metaGroup(b, /relationship|pairing|配对|\bcp\b/i)[0] || b.authors.join('、') || '';
 }
+// The pairing taken from the 【】 in the title: shown under the jacket on the cover page only
+const coverCP = b => bookCP(b.title);
 
 // Titles often carry a bracketed tag in front and a status at the end, e.g.
 // "【tag】Main Title (完结)". Typeset them separately: small tag above, the main title
@@ -65,12 +86,10 @@ function wordBreaks(text) {
 // One jacket design used everywhere: title left-aligned in the middle, author at the foot
 function jacket(b, cls = '') {
   if (b.cover) return `<div class="cover has-img ${cls}" style="background:${b.coverColor || '#555'} url(${b.cover}) center / cover no-repeat"></div>`;
-  const sub = coverSubtitle(b), t = splitTitle(b.title);
+  const t = splitTitle(bookName(b.title));
   return `<div class="cover ${cls}" style="background:${bookColor(b)}">
       <div class="c-mid">
-        ${t.pre ? `<div class="c-pre">${esc(t.pre)}</div>` : ''}
         <div class="c-title">${wordBreaks(t.main)}</div>
-        ${t.suf ? `<div class="c-suf">${esc(t.suf)}</div>` : ''}
         <div class="c-rule"></div>
       </div>
       ${b.authors?.length ? `<div class="c-author">${esc(b.authors.join('、'))}</div>` : ''}
@@ -165,7 +184,7 @@ function askRating(m) {
     <div class="rp-card">
       ${jacket(m, 'rp-jacket')}
       <div class="rp-kicker">读完了</div>
-      <div class="rp-title">${esc(m.title)}</div>
+      <div class="rp-title">${esc(bookName(m.title))}</div>
       <div class="rp-q">给这本书打个分吧</div>
       <div class="rp-stars">${[1, 2, 3, 4, 5].map(n => `<button data-n="${n}">★</button>`).join('')}</div>
       <button class="rp-later">以后再说</button>
@@ -356,7 +375,7 @@ const Library = {
       const pct = last.progress?.pct || 0, ch = (last.progress?.ch || 0) + 1;
       cont.dataset.id = last.id;
       cont.innerHTML = `${jacket(last, 'mini')}
-        <div class="ct"><div class="ct-k">继续阅读</div><div class="ct-t">${esc(last.title)}</div>
+        <div class="ct"><div class="ct-k">继续阅读</div><div class="ct-t">${esc(bookName(last.title))}</div>
         <div class="ct-s">读到第 ${ch} 章 · ${pct < 1 ? pct.toFixed(1) : Math.floor(pct)}%</div></div>
         <button class="ct-go">继续 →</button>`;
       fitTitles(cont);
@@ -389,7 +408,7 @@ const Library = {
             <span class="pick"></span>
           </div>
           <div class="card-info">
-            <div class="t">${esc(b.title)}</div>
+            <div class="t">${esc(bookName(b.title))}</div>
             <div class="s">${b.rating ? `<span class="stars">${'★'.repeat(starCount(b.rating))}</span>` : ''}${esc(sub)}</div>
             <div class="progress"><i style="width:${st === 'done' ? 100 : pct}%"></i></div>
           </div>
@@ -489,7 +508,7 @@ const Library = {
         <div class="bc-head">
           ${jacket(b, 'bc-jacket')}
           <div class="bc-meta">
-            <div class="bc-title">${esc(b.title)}</div>
+            <div class="bc-title">${esc(bookName(b.title))}</div>
             <div class="bc-author">${esc(b.authors.join('、') || '佚名')}</div>
             <div class="bc-stars" aria-label="评分">${[1, 2, 3, 4, 5].map(n => `<button data-rate="${n}" class="${n <= starCount(b.rating) ? 'on' : ''}">★</button>`).join('')}</div>
           </div>
@@ -619,8 +638,10 @@ const Library = {
     const one = ids.length === 1 ? await DB.getMeta(ids[0]) : null;
     switch (act) {
       case 'rename': {
-        const t = await promptDialog({ title: '重命名', value: one.title, ok: '保存' });
-        if (t) await this.update(ids, m => { m.title = t; m.renamed = true; });
+        const t = await promptDialog({ title: '重命名', value: bookName(one.title), ok: '保存' });
+        // The pairing in the stored title stays with the book when only the name is changed
+        const keepCP = bookCP(one.title);
+        if (t) await this.update(ids, m => { m.title = keepCP && !bookCP(t) ? `【${keepCP}】${t}` : t; m.renamed = true; });
         break;
       }
       case 'move': return this.pickFolder(ids);
@@ -655,7 +676,7 @@ const Library = {
       }
       case 'delete': {
         const ok = await confirmDialog({
-          title: ids.length > 1 ? `删除 ${ids.length} 本书？` : `删除《${one.title}》？`,
+          title: ids.length > 1 ? `删除 ${ids.length} 本书？` : `删除《${bookName(one.title)}》？`,
           message: '书籍、阅读进度、书签和笔记都会被删除，无法恢复。', ok: '删除', danger: true });
         if (!ok) return false;
         for (const id of ids) await DB.remove(id);
@@ -723,7 +744,7 @@ const Library = {
     const suggestions = [...new Set(metas.flatMap(m => [...metaGroup(m, /relationship|pairing|\bcp\b/i).slice(0, 2), ...metaGroup(m, /character/i).slice(0, 4)]))]
       .filter(t => !all.includes(t)).slice(0, 10);
     const s = quickSheet(`
-      <div class="pk-title">标签<small>${ids.length > 1 ? `${ids.length} 本书` : esc(metas[0].title)}</small></div>
+      <div class="pk-title">标签<small>${ids.length > 1 ? `${ids.length} 本书` : esc(bookName(metas[0].title))}</small></div>
       <div class="tag-cloud">
         ${all.map(t => `<button class="tag-chip ${state(t)}" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}
         <button class="tag-chip add" data-new="1">＋ 新标签</button>

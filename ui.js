@@ -10,6 +10,25 @@ function anim(el, frames, opts) {
   return el.animate(frames, { fill: 'forwards', ...opts }).finished;
 }
 
+// ================= Book titles =================
+// One rule for every book title. A title like "【亚内】Some Work" carries the pairing in its first
+// full-width bracket pair: the pairing is shown on the cover page only, every other place shows the
+// cleaned name. The stored title is never changed, so the raw text (and the pairing) always stays in
+// the data. No brackets, empty brackets, or a title that is only a bracket: nothing is extracted and
+// the title is returned as it is. Further bracket pairs are not touched, so nothing is lost silently.
+function parseBookTitle(raw) {
+  const s = String(raw ?? '');
+  const m = s.match(/【([^【】]*)】/);
+  const cp = m ? m[1].trim() : '';
+  if (!m || !cp) return { name: s, cp: '', raw: s };
+  const end = m.index + m[0].length;
+  const sep = /\s/.test(s[m.index - 1] || '') || /\s/.test(s[end] || '') ? ' ' : '';
+  const name = (s.slice(0, m.index).trimEnd() + sep + s.slice(end).trimStart()).trim();
+  return name ? { name, cp, raw: s } : { name: s, cp: '', raw: s };
+}
+const bookName = raw => parseBookTitle(raw).name;
+const bookCP = raw => parseBookTitle(raw).cp;
+
 // ================= Bottom sheets =================
 // Markup: <div class="sheet-modal hidden"><div class="sheet-card">…</div></div>
 // Tap the backdrop or drag the card down to dismiss.

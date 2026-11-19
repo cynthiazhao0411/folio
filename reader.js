@@ -56,7 +56,7 @@ const Reader = {
     this.wordCount = book.chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
 
     this.t2s = book.t2s ?? isTraditional(book);       // traditional books show as simplified by default
-    this.el.title.textContent = this.t2s ? toSimplified(book.title) : book.title;
+    this.el.title.textContent = this.t2s ? toSimplified(bookName(book.title)) : bookName(book.title);
     this.el.reader.classList.remove('hidden');
     this.layoutId++;
     const ch = Math.min(progress?.ch || 0, book.chapters.length - 1);
@@ -489,7 +489,7 @@ const Reader = {
     this.layoutId++;
     const v = this.views[this.top], frac = this.page / this.pages, pages = this.ensure(v, this.ch);
     this.commit(this.show(v, this.ch, Math.round(frac * pages)));
-    this.el.title.textContent = this.t2s ? toSimplified(this.book.title) : this.book.title;
+    this.el.title.textContent = this.t2s ? toSimplified(bookName(this.book.title)) : bookName(this.book.title);
   },
 
   // ================= Table of contents =================
@@ -537,7 +537,7 @@ const Reader = {
         <div class="toc-book">
           ${this.coverHTML ? this.coverHTML(b) : ''}
           <div class="toc-book-info">
-            <div class="tb-title">${b.title}</div>
+            <div class="tb-title">${bookName(b.title)}</div>
             <div class="tb-author">${b.authors.join('、')}</div>
             <div class="tb-meta">${pct}% · ${b.chapters.length} 章 · ${words}</div>
             ${(() => { const m = this.metaInfo?.(); if (!m?.readMs) return '';

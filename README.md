@@ -82,6 +82,7 @@ Folio's own interface (shelf, covers, front pages, The End, dialogs, menus, pane
 
 - `fonts/NotoSerifSC-Regular.woff` (400) and `fonts/NotoSerifSC-Medium.woff` (500-700, so headings never get a synthesised bold). Official Noto Serif CJK 2.002 outlines, subset to GB2312 + Latin + punctuation and converted to WOFF. Characters outside the subset fall back along `--ui-font`.
 - Licence: SIL Open Font License 1.1, copyright 2017-2023 Adobe. The full text is in `fonts/OFL.txt` and must stay with the font files.
+- Folio Serif is used for the jacket (title and author), the cover-page title and everything below its divider. Three spots use the system Songti stack (`--font`): the series line and the `CP · …` line on the cover page, and the book title under each shelf jacket. The `CP · …` line only appears when the work has a pairing.
 - Book text is not affected: the reader's text column keeps its own `--font` stack, and so do quoted passages of the book (highlight lists, note editor). `--ui-font` is for interface text only.
 - The service worker precaches both files, so the font also works offline.
 
@@ -107,3 +108,11 @@ Push to GitHub, then in the repository go to **Settings → Pages** and serve th
 3. For the collect bookmark: **⋯ → 设备同步 → 网页收书书签 → 复制书签**, then save it as a bookmark's address.
 
 The token is stored only on your devices and inside your own bookmark. Do not share either.
+
+## Book titles and pairings
+
+A title such as `【亚内】Some Work` carries the pairing in its first full-width bracket pair. `parseBookTitle()` in `ui.js` is the single rule: the cover page shows `CP · 亚内` under the jacket, and every other place (shelf, jacket, reader, contents, dialogs, stats) shows the cleaned name through `bookName()`. The stored title is never rewritten, so the pairing stays in the data and the rule applies to existing and newly imported books alike. Titles without brackets, with empty brackets, or consisting only of a bracket are shown unchanged; further bracket pairs after the first are left in the name.
+
+## Backup export
+
+On desktop browsers the backup is always a normal file download (`folio-backup-YYYY-MM-DD.json`). The share sheet is used on touch devices only, and a failed share falls back to a download. The file holds every store except `snapshots`, the settings, and the list of empty folders; book titles are saved exactly as stored.

@@ -108,7 +108,7 @@ const StatsPage = {
       metas = metas.filter(m => m.id === bookId);
     }
     const sheet = document.getElementById('stats-sheet');
-    sheet.querySelector('.sheet-tabs button').textContent = bookId ? (metas[0]?.title || '阅读统计') : '阅读统计';
+    sheet.querySelector('.sheet-tabs button').textContent = bookId ? (metas[0] ? bookName(metas[0].title) : '阅读统计') : '阅读统计';
     this.mode = bookId ? 'all' : 'week';
     const byDate = new Map(), byKey = new Map();
     for (const r of daily) {
@@ -239,7 +239,7 @@ const StatsPage = {
       <div class="st-rating">
         <div class="st-avg"><b>${avg.toFixed(1)}</b><span class="st-avg-stars">${'★'.repeat(Math.round(avg))}<i>${'★'.repeat(5 - Math.round(avg))}</i></span><small>${rated.length} 本已评分</small></div>
         <div class="st-dist">${counts.map(([n, list]) => `
-          <div class="st-dist-row" title="${list.length ? list.map(m => m.title).slice(0, 4).join('、') + (list.length > 4 ? ' 等' : '') : '暂无'}">
+          <div class="st-dist-row" title="${list.length ? list.map(m => bookName(m.title)).slice(0, 4).join('、') + (list.length > 4 ? ' 等' : '') : '暂无'}">
             <span>${n}★</span>
             <div class="st-dist-bar"><i style="width:${list.length / max * 100}%"></i></div>
             <em>${list.length}</em>
@@ -279,7 +279,7 @@ const StatsPage = {
     const top = list[0][1];
     return `<div class="st-rank-title">读得最多</div>` + list.map(([id, ms]) => {
       const m = this.data.metas.get(id);
-      const title = m ? m.title : '已删除的书';
+      const title = m ? bookName(m.title) : '已删除的书';
       return `<div class="st-rank">
         ${m ? jacket(m, 'mini') : '<div class="cover mini"></div>'}
         <div class="st-rank-info">

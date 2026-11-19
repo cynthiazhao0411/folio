@@ -224,9 +224,9 @@ function titlePageHTML(b, wordCount) {
     <div class="tp">
       ${series.length ? `<div class="tp-series">${esc(series[0])}</div>` : ''}
       ${jacket(b, 'tp-cover')}
-      ${(() => { const t = splitTitle(b.title); return `
-      ${t.pre || t.suf ? `<div class="tp-tagline">${esc([t.pre, t.suf].filter(Boolean).join(' · '))}</div>` : ''}
-      <div class="tp-title">${wordBreaks(t.main)}</div>`; })()}
+      ${coverCP(b) ? `<div class="tp-cp">CP<i>·</i>${esc(coverCP(b))}</div>` : ''}
+      ${(() => { const t = splitTitle(bookName(b.title)); return `
+      <div class="tp-title"${(() => { const c = titleShades(b.coverColor || bookColor(b)); return c ? ` style="--tt-dark:${c.dark};--tt-light:${c.light}"` : ''; })()}>${wordBreaks(t.main)}</div>`; })()}
       ${lines ? `<div class="tp-lines">${lines}</div>` : ''}
       ${summary ? `<div class="tp-summary">${esc(summary)}</div>` : ''}
     </div>`;
@@ -395,14 +395,14 @@ async function importFromClipboard() {
     // Several works copied by the 收书 bookmark come as one bundle
     const items = text.startsWith('{"app":"folio-bundle"') ? JSON.parse(text).items || [] : [{ html: text }];
     for (const [i, it] of items.entries()) {
-      try { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: book.title }); }
+      try { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: bookName(book.title) }); }
       catch (err) { parseFailed.push({ label: `第 ${i + 1} 篇`, error: importError(err) }); }
     }
     const res = await importBooks(sources, sources.length === 1 && !parseFailed.length,
       (i, n) => progress.set(n > 1 ? `正在导入 ${i} / ${n}…` : '正在导入…'));
     progress.done();
     const failed = [...parseFailed, ...res.failed];
-    if (!failed.length && res.count === 1 && sources.length === 1 && items.length === 1) toast(`已导入《${sources[0].book.title}》`);
+    if (!failed.length && res.count === 1 && sources.length === 1 && items.length === 1) toast(`已导入《${bookName(sources[0].book.title)}》`);
     else reportImport(res, failed);
   } catch (err) {
     console.error(err);
@@ -473,22 +473,42 @@ document.getElementById('btn-hidden').onclick = async () => {
   Library.render();
 };
 
+// Desktop browsers (Chrome, Edge, Safari) also expose the Web Share API, but sharing a file there needs
+// a fresh click and a share target. Reading every store takes time, so the click had already expired and
+// the share failed with NotAllowedError, which was swallowed as "user cancelled": the button did nothing.
+// The share sheet is now used on touch devices only, and any share error other than a cancel falls back
+// to a normal download.
+const useShareSheet = file => !!navigator.canShare && matchMedia('(pointer: coarse)').matches && navigator.canShare({ files: [file] });
+
+// The link goes into the page before the click (Firefox ignores clicks on detached links) and the
+// object URL stays alive long enough for large files to finish saving.
+function downloadFile(file) {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: file.name, hidden: true });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 30000);
+}
+
 document.getElementById('btn-backup').onclick = async () => {
   Sheet.close(moreSheet);
-  // Every store is included, so records added in later versions are backed up too
-  const stores = {};
-  for (const n of await DB.storeNames()) if (n !== 'snapshots') stores[n] = await DB.dump(n);
-  const data = { app: 'folio', version: 2, savedAt: Date.now(), stores, settings };
-  localStorage.setItem('folio-backup-at', Date.now());
-  const name = `folio-backup-${new Date().toLocaleDateString('sv')}.json`;
-  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
-  // iOS: use the share sheet ("Save to Files"); desktop: regular download
-  if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); } catch { /* user cancelled */ }
-  } else {
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  try {
+    // Every store is included, so records added in later versions are backed up too. Book titles are
+    // saved exactly as stored (including any 【】 pairing); only the display is cleaned.
+    const stores = {};
+    for (const n of await DB.storeNames()) if (n !== 'snapshots') stores[n] = await DB.dump(n);
+    const data = { app: 'folio', version: 2, savedAt: Date.now(), stores, settings, folders: Library.extraFolders() };   // folders: empty ones live outside the database
+    const name = `folio-backup-${new Date().toLocaleDateString('sv')}.json`;
+    const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+    let saved = false;
+    if (useShareSheet(file)) {                       // iOS / Android: share sheet ("Save to Files")
+      try { await navigator.share({ files: [file] }); saved = true; }
+      catch (err) { if (err?.name === 'AbortError') return; }
+    }
+    if (!saved) downloadFile(file);
+    localStorage.setItem('folio-backup-at', Date.now());
+  } catch (err) {
+    console.error('backup failed', err);
+    alert('备份失败：' + (err?.message || '未知错误'));
   }
 };
 

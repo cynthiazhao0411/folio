@@ -231,7 +231,7 @@ const Sync = {
       const group = names.slice(i, i + 5), sources = [];
       for (const n of group) {
         const text = await this.fileText(g.files[n]);
-        if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: book.title }); }
+        if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: bookName(book.title) }); }
         else skipped++;
       }
       const res = await importBooks(sources, false);
