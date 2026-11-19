@@ -145,19 +145,27 @@ const BookAnim = {
 };
 
 // ================= Title fitting =================
-// Keep a title on one line by shrinking it (down to `minScale` of its normal size).
-// If it still doesn't fit, let it wrap — but only at spaces and punctuation, never in
-// the middle of a word like 曼哈|顿.
-function fitTitle(el, minScale = .55) {
+// Nothing on a cover is ever cut off. Latin titles shrink a little to stay on one line, then
+// wrap between words (and shrink further only if a single word is still too wide). Chinese
+// titles keep their size and simply continue on the next lines, wrapping between words.
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/g;
+function fitTitle(el) {
   el.style.fontSize = '';
   el.classList.remove('fit-wrap');
   el.classList.add('fit-line');
+  if (!el.clientWidth) return;                       // not laid out yet (hidden): fitted again when shown
   const base = parseFloat(getComputedStyle(el).fontSize);
+  const text = el.textContent.replace(/\u200b/g, '');
+  const cjk = (text.match(CJK_RE) || []).length / Math.max(1, text.length) > .4;
+  const floor = cjk ? .88 : .72;                     // how far one line may shrink before wrapping
   const ratio = el.clientWidth / el.scrollWidth;
   if (ratio >= 1) return;
-  if (ratio >= minScale) { el.style.fontSize = Math.floor(base * ratio * 10) / 10 + 'px'; return; }
+  if (ratio >= floor) { el.style.fontSize = Math.floor(base * ratio * 10) / 10 + 'px'; return; }
   el.classList.remove('fit-line');
-  el.classList.add('fit-wrap');                    // two balanced lines, broken between words
-  el.style.fontSize = base * .82 + 'px';
+  el.classList.add('fit-wrap');                      // wraps between words
+  let size = base * (cjk ? .92 : .84);
+  el.style.fontSize = size + 'px';
+  const cut = () => el.scrollWidth > el.clientWidth + .5 || el.scrollHeight > el.clientHeight + .5;
+  for (let i = 0; i < 10 && size > base * .5 && cut(); i++) { size *= .94; el.style.fontSize = size + 'px'; }
 }
 function fitTitles(root) { root.querySelectorAll('.c-title, .tp-title').forEach(el => fitTitle(el)); }

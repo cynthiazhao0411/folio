@@ -274,60 +274,111 @@ Reader.onProgress = p => {
 
 // ================= Import =================
 // From files (the 导入 button) or from the clipboard (see the share-sheet shortcut in the README)
-async function importBooks(sources, open = true) {        // sources: [{ book, label }]
+const MIN_TEXT = 20;                                       // fewer characters than this is "no text", not a book
+const importError = err => /quota/i.test(err?.name + ' ' + err?.message) ? '存储空间不足' : (err?.message || '未知错误');
+const bookText = chapters => chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
+
+// A progress message that stays up until done() (toast() disappears on its own)
+function progressToast() {
+  const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: '' });
+  document.body.appendChild(t);
+  return { set: msg => { t.textContent = msg; }, done: () => t.remove() };
+}
+
+// sources: [{ book, label }]. Returns { count, updated, added, failed: [{ label, error }] }.
+// A book only counts once its text AND its record have been written and read back; if any step
+// fails the book is rolled back (or its previous version restored), so the shelf never holds a
+// record without text, and the numbers reported always match what is really on the shelf.
+async function importBooks(sources, open = true, onProgress) {
   let lastId = null, count = 0, updated = 0;
-  for (const { book, label } of sources) {
-    if (!book.chapters.length) { toast(`《${label}》里没有读到正文`); continue; }
-    const old = await DB.getMeta(book.id);
-    const { chapters, ...info } = book;
-    // Re-importing a book keeps everything you did with it on the shelf
-    const keep = {};
-    for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
-      if (old?.[k] !== undefined) keep[k] = old[k];
-    for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
-      if (old?.[k] !== undefined) keep[k] = old[k];
-    if (old?.renamed) info.title = old.title;
-    const words = chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
-    // Every import that changes the book is remembered; new chapters get a badge on the shelf
-    const versions = keep.versions || [];
-    const prev = versions[versions.length - 1] || (old ? { chapters: old.chapterCount, words: old.words } : null);
-    if (!prev || prev.chapters !== chapters.length || prev.words !== words) versions.push({ at: Date.now(), chapters: chapters.length, words });
-    const added = old ? chapters.length - (old.chapterCount || 0) : 0;
-    if (added > 0) keep.newChapters = (keep.newChapters || 0) + added;
-    if (old) updated++;
-    await DB.putMeta({
-      ...info,
-      ...keep,
-      versions,
-      chapterCount: chapters.length,
-      words,
-      addedAt: old?.addedAt || Date.now(),
-      lastReadAt: old?.lastReadAt,
-      progress: old?.progress,
-    });
-    await DB.putContent({ id: book.id, chapters });
-    lastId = book.id; count++;
+  const failed = [];
+  for (const [i, { book, label }] of sources.entries()) {
+    onProgress?.(i + 1, sources.length);
+    if (!book.chapters.length) { failed.push({ label, error: '没有读到正文' }); continue; }
+    const words = bookText(book.chapters);
+    if (words < MIN_TEXT) { failed.push({ label, error: '内容是空的或文字太少' }); continue; }
+    let old = null, oldContent = null;
+    try {
+      old = await DB.getMeta(book.id);
+      oldContent = old ? await DB.getContent(book.id) : null;
+      const { chapters, ...info } = book;
+      // Re-importing a book keeps everything you did with it on the shelf
+      const keep = {};
+      for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
+        if (old?.[k] !== undefined) keep[k] = old[k];
+      for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
+        if (old?.[k] !== undefined) keep[k] = old[k];
+      if (old?.renamed) info.title = old.title;
+      // Every import that changes the book is remembered; new chapters get a badge on the shelf
+      const versions = [...(keep.versions || [])];
+      const prev = versions[versions.length - 1] || (old ? { chapters: old.chapterCount, words: old.words } : null);
+      if (!prev || prev.chapters !== chapters.length || prev.words !== words) versions.push({ at: Date.now(), chapters: chapters.length, words });
+      const added = old ? chapters.length - (old.chapterCount || 0) : 0;
+      if (added > 0) keep.newChapters = (keep.newChapters || 0) + added;
+      // Text first, record second: a failure in between can never leave a record without text
+      await DB.putContent({ id: book.id, chapters });
+      await DB.putMeta({
+        ...info,
+        ...keep,
+        versions,
+        chapterCount: chapters.length,
+        words,
+        addedAt: old?.addedAt || Date.now(),
+        lastReadAt: old?.lastReadAt,
+        progress: old?.progress,
+      });
+      const [m, c] = await Promise.all([DB.getMeta(book.id), DB.getContent(book.id)]);   // read back to be sure
+      if (!m || !c?.chapters?.length) throw new Error('写入后读不到，没有保存成功');
+      if (old) updated++;
+      lastId = book.id; count++;
+    } catch (err) {
+      console.error(err);
+      try {                                                  // undo this book only
+        if (old) { if (oldContent) await DB.putContent(oldContent); await DB.putMeta(old); }
+        else await DB.remove(book.id);
+      } catch (e2) { console.error('rollback failed', e2); }
+      failed.push({ label, error: importError(err), retry: true });   // storage problem: worth trying again
+    }
   }
-  await renderShelf();
-  if (count === 1 && open) openBook(lastId);  // open right away when a single book comes in
-  return { count, updated, added: count - updated };
+  try { await renderShelf(); } catch (err) { console.error(err); }
+  if (count === 1 && open && !failed.length) openBook(lastId);  // open right away when a single book comes in
+  return { count, updated, added: count - updated, failed };
 }
 const importSummary = r => r.updated && r.added ? `新增 ${r.added} 本 · 更新 ${r.updated} 本`
   : r.updated ? `更新了 ${r.updated} 本` : `新增 ${r.added} 本`;
+
+// One honest report for every import: what really went onto the shelf and what did not
+function reportImport(res, failed) {
+  if (!failed.length) { if (res.count > 1 || res.updated) toast(importSummary(res)); return; }
+  const list = failed.slice(0, 8).map(f => `${f.label}：${f.error}`);
+  if (failed.length > 8) list.push(`…另有 ${failed.length - 8} 个`);
+  dialog({
+    title: res.count ? `导入了 ${res.count} 本，${failed.length} 个失败` : `没有导入任何书（${failed.length} 个失败）`,
+    message: (res.count ? importSummary(res) + '\n\n' : '') + list.join('\n'),
+    ok: '好',
+  });
+}
 
 document.getElementById('picker').addEventListener('change', async e => {
   const files = [...e.target.files];
   e.target.value = '';
   if (!files.length) return;
-  if (files.length > 1 || /\.(zip|pdf|epub)$/i.test(files[0].name)) toast('正在读取…');
-  const sources = [], failed = [];
-  for (const file of files) {
-    for (const r of await Importer.parseFile(file)) (r.error ? failed : sources).push(r);
+  const progress = progressToast();
+  try {
+    const sources = [], parseFailed = [];
+    for (const [i, file] of files.entries()) {
+      progress.set(files.length > 1 ? `正在读取 ${i + 1} / ${files.length}…` : '正在读取…');
+      for (const r of await Importer.parseFile(file)) (r.error ? parseFailed : sources).push(r);
+    }
+    const res = await importBooks(sources, sources.length === 1 && !parseFailed.length,
+      (i, n) => progress.set(n > 1 ? `正在导入 ${i} / ${n}…` : '正在导入…'));
+    progress.done();
+    reportImport(res, [...parseFailed, ...res.failed]);
+  } catch (err) {
+    console.error(err);
+    progress.done();
+    dialog({ title: '导入出错', message: importError(err), ok: '好' });
   }
-  const res = await importBooks(sources, sources.length === 1 && !failed.length);
-  if (failed.length) {
-    dialog({ title: `${failed.length} 个文件没能导入`, message: failed.map(f => `${f.label}：${f.error}`).join('\n'), ok: '好' });
-  } else if (res.count > 1 || res.updated) toast(importSummary(res));
 });
 
 // The 导入 button offers two ways in: a file, or a work copied to the clipboard
@@ -338,17 +389,26 @@ async function importFromClipboard() {
   let text = '';
   try { text = await navigator.clipboard.readText(); } catch { return toast('没有读取剪贴板的权限'); }
   if (!text || text.length < 200) return toast('剪贴板里没有作品内容');
-  // Several works copied by the 收书 bookmark come as one bundle
-  if (text.startsWith('{"app":"folio-bundle"')) {
-    const items = JSON.parse(text).items || [];
-    const sources = items.map(it => { const book = Importer.parseText(it.html, '粘贴的作品'); return { book, label: book.title }; });
-    const res = await importBooks(sources, sources.length === 1);
-    if (res.count) toast(importSummary(res));
-    return;
+  const progress = progressToast();
+  try {
+    const sources = [], parseFailed = [];
+    // Several works copied by the 收书 bookmark come as one bundle
+    const items = text.startsWith('{"app":"folio-bundle"') ? JSON.parse(text).items || [] : [{ html: text }];
+    for (const [i, it] of items.entries()) {
+      try { const book = Importer.parseText(it.html, '粘贴的作品'); sources.push({ book, label: book.title }); }
+      catch (err) { parseFailed.push({ label: `第 ${i + 1} 篇`, error: importError(err) }); }
+    }
+    const res = await importBooks(sources, sources.length === 1 && !parseFailed.length,
+      (i, n) => progress.set(n > 1 ? `正在导入 ${i} / ${n}…` : '正在导入…'));
+    progress.done();
+    const failed = [...parseFailed, ...res.failed];
+    if (!failed.length && res.count === 1 && sources.length === 1 && items.length === 1) toast(`已导入《${sources[0].book.title}》`);
+    else reportImport(res, failed);
+  } catch (err) {
+    console.error(err);
+    progress.done();
+    dialog({ title: '导入出错', message: importError(err), ok: '好' });
   }
-  const book = Importer.parseText(text, '粘贴的作品');
-  const n = (await importBooks([{ book, label: book.title }])).count;
-  if (n) toast(`已导入《${book.title}》`);
 }
 // Opening the app with #paste (from the shortcut) shows a one-tap paste prompt;
 // browsers only let a page read the clipboard right after a tap.

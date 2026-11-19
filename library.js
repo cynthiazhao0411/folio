@@ -78,12 +78,12 @@ function jacket(b, cls = '') {
 }
 
 // Phone shelf: three columns, and exactly three full rows on the first screen. The cover
-// size follows the real space left under the header (status bar and notch included);
+// height follows the real space left under the header (status bar and notch included);
 // the third row is padded so the fourth starts below the screen's edge.
 function fitShelf() {
   const grid = document.getElementById('grid');
   if (!grid) return;
-  const props = ['--cw', '--rg', '--cf', '--tail'];
+  const props = ['--cw', '--ar', '--rg', '--cf', '--tail'];
   if (innerWidth > 600 || !grid.querySelector('.card')) { props.forEach(p => grid.style.removeProperty(p)); return; }
   props.forEach(p => grid.style.removeProperty(p));
   const shelf = document.getElementById('shelf');
@@ -99,14 +99,19 @@ function fitShelf() {
   const cw = Math.floor(Math.max(70, Math.min(byWidth, byHeight)));
   const rowH = cw * 1.5 + info;
   const rg = Math.max(minGap, Math.min(30, (avail - 3 * rowH) / 2));
-  grid.style.setProperty('--cw', cw + 'px');
+  // Covers are a little wider than the height budget alone allows: the height stays as computed
+  // (so three rows still fit), the width grows ~10%, never below an 18px gap between columns.
+  const wide = Math.max(cw, Math.min(Math.floor(byWidth), Math.round(cw * 1.1)));
+  grid.style.setProperty('--cw', wide + 'px');
+  grid.style.setProperty('--ar', (wide / (cw * 1.5)).toFixed(4));
   grid.style.setProperty('--rg', rg + 'px');
   grid.style.setProperty('--cf', (cw / 10.5).toFixed(2) + 'px');     // cover lettering scales with the cover
   // Push the fourth row just past the bottom of the screen
   const row3End = top + 3 * rowH + 2 * rg;
   grid.style.setProperty('--tail', Math.max(0, innerHeight - row3End - rg + 2) + 'px');
 }
-addEventListener('resize', () => fitShelf());
+addEventListener('resize', () => { fitShelf(); const g = document.getElementById('grid'); if (g) fitTitles(g); });
+document.fonts?.ready.then(() => { const g = document.getElementById('grid'); if (g) fitTitles(g); });
 
 // Reading status: set by hand, or inferred from progress and finished read-throughs
 function statusOf(b) {
@@ -258,9 +263,16 @@ function quickSheet(html, cls = '') {
   const root = document.createElement('div');
   root.className = 'sheet-modal fixed';
   root.innerHTML = `<div class="sheet-card ${cls}"><div class="sheet-grip"></div>${html}</div>`;
+  // While books are being multi-selected the whole sheet sits on top of the toolbar, never behind it
+  const bar = document.getElementById('select-bar');
+  if (Library.selecting && bar && !bar.classList.contains('hidden')) {
+    root.classList.add('above-bar');
+    root.style.bottom = bar.offsetHeight + 'px';
+  }
   document.body.appendChild(root);
   Sheet.open(root);
   const close = async () => { await Sheet.close(root); root.remove(); };
+  root._close = close;
   root.addEventListener('click', e => { if (e.target === root) setTimeout(() => root.remove(), 300); });
   return { root, card: root.firstElementChild, close };
 }
@@ -281,7 +293,24 @@ const Library = {
     }
     if (rerender) await this.render();
   },
-  folders() { return [...new Set(this.books.map(b => b.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh')); },
+  // Empty folders made from the shelf are remembered here; a book's own folder name is never touched
+  extraFolders() { try { return JSON.parse(localStorage.getItem('folio-folders') || '[]').filter(x => x && typeof x === 'string'); } catch { return []; } },
+  saveExtraFolders(list) { try { localStorage.setItem('folio-folders', JSON.stringify([...new Set(list)])); } catch { /* storage blocked */ } },
+  folders() { return [...new Set([...this.books.map(b => b.folder).filter(Boolean), ...this.extraFolders()])].sort((a, b) => a.localeCompare(b, 'zh')); },
+  async createFolder() {
+    const f = await promptDialog({ title: '新建文件夹', placeholder: '文件夹名称', ok: '创建' });
+    if (!f) return null;
+    if (!this.folders().includes(f)) this.saveExtraFolders([...this.extraFolders(), f]);
+    return f;
+  },
+  async removeFolder(name) {
+    if (this.books.some(b => b.folder === name)) return toast('文件夹里还有书，先把书移出来再删除');
+    const ok = await confirmDialog({ title: `删除文件夹「${name}」？`, message: '里面没有书，只会删除这个空文件夹。', ok: '删除', danger: true });
+    if (!ok) return;
+    this.saveExtraFolders(this.extraFolders().filter(x => x !== name));
+    if (this.filter === 'f:' + name) this.filter = 'all';
+    await this.render();
+  },
   tags() { return [...new Set(this.books.flatMap(b => b.userTags || []))].sort((a, b) => a.localeCompare(b, 'zh')); },
 
   visible() {
@@ -306,13 +335,15 @@ const Library = {
       ? `${this.showHidden ? '隐藏的书 · ' : ''}共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
-    // Filter chips: all · folders · tags
+    // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
+    // (long-press) and in the data, and the 't:' filter in visible() is kept for later versions.
     const chips = document.getElementById('chips');
     const chip = (key, label, icon = '') => `<button data-filter="${esc(key)}" class="${this.filter === key ? 'on' : ''}">${icon}${esc(label)}</button>`;
-    chips.innerHTML = folders.length || tags.length || this.showHidden
-      ? (this.showHidden ? `<button class="on back-hidden" data-filter="__unhide">${ICON.show}退出隐藏书架</button>` : '')
-        + chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('') + tags.map(t => chip('t:' + t, t, '#')).join('')
-      : '';
+    chips.innerHTML = this.showHidden
+      ? `<button class="on back-hidden" data-filter="__unhide">${ICON.show}退出隐藏书架</button>`
+        + chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('')
+      : `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
+        + (folders.length ? chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('') : '');
 
     // Continue reading: the book opened most recently (not one already finished)
     const cont = document.getElementById('continue');
@@ -332,7 +363,7 @@ const Library = {
     }
 
     const grid = document.getElementById('grid');
-    requestAnimationFrame(() => fitShelf());
+    requestAnimationFrame(() => { fitShelf(); fitTitles(grid); });
     if (!this.books.length || (!list.length && this.filter === 'all' && !this.showHidden)) {
       grid.innerHTML = `
         <div class="empty">
@@ -371,17 +402,26 @@ const Library = {
   // ---------- gestures on the grid ----------
   bind() {
     const grid = document.getElementById('grid');
-    let timer = null, pressedAt = 0, x0 = 0, y0 = 0;
+    let timer = null, hint = null, pressing = null, pressedAt = 0, x0 = 0, y0 = 0;
+    const unpress = () => { clearTimeout(timer); clearTimeout(hint); pressing?.classList.remove('pressing'); pressing = null; };
     grid.addEventListener('touchstart', e => {
       const card = e.target.closest('.card');
       if (!card || this.selecting) return;
+      unpress();
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
-      timer = setTimeout(() => { pressedAt = Date.now(); this.openMenu(card.dataset.id); }, 480);
+      hint = setTimeout(() => { pressing = card; card.classList.add('pressing'); }, 130);     // the book sinks slightly while you hold
+      timer = setTimeout(() => { pressedAt = Date.now(); this.openMenu(card.dataset.id); }, 440);
     }, { passive: true });
     grid.addEventListener('touchmove', e => {
-      if (Math.hypot(e.touches[0].clientX - x0, e.touches[0].clientY - y0) > 8) clearTimeout(timer);
+      if (Math.hypot(e.touches[0].clientX - x0, e.touches[0].clientY - y0) > 8) unpress();
     }, { passive: true });
-    grid.addEventListener('touchend', () => clearTimeout(timer), { passive: true });
+    grid.addEventListener('touchend', unpress, { passive: true });
+    grid.addEventListener('touchcancel', unpress, { passive: true });
+    // A held finger must never start iOS text selection (blue handles) on the shelf or the card
+    document.addEventListener('selectstart', e => {
+      const el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+      if (el?.closest('#grid, #chips, .bookcard-wrap, .sheet-modal.fixed, #select-bar, #select-top') && !el.closest('input, textarea')) e.preventDefault();
+    });
     grid.addEventListener('contextmenu', e => {                 // right-click = long-press on desktop
       const card = e.target.closest('.card');
       if (card && !this.selecting) { e.preventDefault(); this.openMenu(card.dataset.id); }
@@ -394,7 +434,24 @@ const Library = {
       openBook(card.dataset.id);
     });
 
-    document.getElementById('chips').onclick = e => {
+    // Chips: tap to filter; the first one makes a new folder. Press and hold an empty folder to delete it.
+    const chips = document.getElementById('chips');
+    let chipTimer = null, chipHeld = 0;
+    const holdChip = e => {
+      const b = e.target.closest('[data-filter^="f:"]');
+      if (!b) return;
+      chipTimer = setTimeout(() => { chipHeld = Date.now(); navigator.vibrate?.(8); this.removeFolder(b.dataset.filter.slice(2)); }, 600);
+    };
+    chips.addEventListener('touchstart', holdChip, { passive: true });
+    ['touchend', 'touchmove', 'touchcancel'].forEach(t => chips.addEventListener(t, () => clearTimeout(chipTimer), { passive: true }));
+    chips.addEventListener('contextmenu', e => { const b = e.target.closest('[data-filter^="f:"]'); if (b) { e.preventDefault(); this.removeFolder(b.dataset.filter.slice(2)); } });
+    chips.onclick = async e => {
+      if (Date.now() - chipHeld < 700) return;
+      if (e.target.closest('[data-newfolder]')) {
+        const f = await this.createFolder();
+        if (f) { await this.render(); toast(`已新建「${f}」`); chips.querySelector(`[data-filter="${CSS.escape('f:' + f)}"]`)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }
+        return;
+      }
       const b = e.target.closest('[data-filter]');
       if (!b) return;
       if (b.dataset.filter === '__unhide') { this.showHidden = false; this.filter = 'all'; }
@@ -459,6 +516,7 @@ const Library = {
         <button class="bc-delete" data-act="delete">删除这本书</button>
       </div>`;
     document.body.appendChild(root);
+    getSelection()?.removeAllRanges();
     const sheet = root.querySelector('.bookcard');
 
     // The status pill slides under the chosen segment
@@ -476,6 +534,7 @@ const Library = {
     cov.style.transition = 'transform .35s cubic-bezier(.34,1.4,.64,1), box-shadow .35s';
     cov.style.transform = 'translateY(-8px) rotate(-1.5deg)';
     cov.style.boxShadow = '0 18px 30px -12px rgba(0,0,0,.45)';
+    card.classList.remove('pressing');
 
     root.animate([{ backgroundColor: 'rgba(30,20,10,0)' }, { backgroundColor: 'rgba(30,20,10,.32)' }], { duration: 280, fill: 'forwards' });
     sheet.animate([{ transform: 'translateY(105%) rotate(-2.5deg)' }, { transform: 'translateY(-6px) rotate(.4deg)', offset: .72 }, { transform: 'none' }],
@@ -628,22 +687,26 @@ const Library = {
     const metas = await Promise.all(ids.map(id => DB.getMeta(id)));
     const cur = metas.every(m => m.folder === metas[0].folder) ? metas[0].folder : undefined;
     const count = f => this.books.filter(b => b.folder === f).length;
+    const rows = this.folders().map(f => `<button class="pk-row${cur === f ? ' on' : ''}" data-f="${esc(f)}">${ICON.folder}<span>${esc(f)}</span><small>${count(f)}</small></button>`).join('');
     const s = quickSheet(`
       <div class="pk-title">移动到文件夹</div>
-      <div class="pk-list">
-        ${this.folders().map(f => `<button class="pk-row${cur === f ? ' on' : ''}" data-f="${esc(f)}">${ICON.folder}<span>${esc(f)}</span><small>${count(f)}</small></button>`).join('')}
-        <button class="pk-row add" data-new="1">＋ 新建文件夹</button>
+      <div class="pk-list sheet-scroll">
+        ${rows || '<div class="pk-empty">还没有文件夹</div>'}
         ${metas.some(m => m.folder) ? `<button class="pk-row muted" data-f="">移出文件夹</button>` : ''}
-      </div>`);
+      </div>
+      <div class="pk-foot"><button class="pk-row add" data-new="1">＋ 新建文件夹</button></div>`, 'pk-folders');
     s.card.onclick = async e => {
       const row = e.target.closest('.pk-row');
       if (!row) return;
       let f = row.dataset.f;
-      if (row.dataset.new) { await s.close(); f = await promptDialog({ title: '新建文件夹', placeholder: '文件夹名称', ok: '创建' }); if (!f) return; }
-      else await s.close();
+      if (row.dataset.new) {                       // the sheet stays open under the name dialog; cancel returns to it
+        f = await this.createFolder();
+        if (!f) return;
+      }
+      await s.close();
       await this.update(ids, m => { if (f) m.folder = f; else delete m.folder; });
       toast(f ? `已移到「${f}」` : '已移出文件夹');
-      this.exitSelect();
+      this.exitSelect();                           // straight back to the shelf
     };
   },
 
@@ -733,6 +796,7 @@ const Library = {
   },
   async exitSelect() {
     if (!this.selecting) return;
+    document.querySelectorAll('.sheet-modal.fixed').forEach(r => r._close?.());
     this.selecting = false;
     this.selected.clear();
     document.querySelectorAll('.card.picked').forEach(c => c.classList.remove('picked'));

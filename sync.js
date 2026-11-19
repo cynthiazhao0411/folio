@@ -206,25 +206,49 @@ const Sync = {
     return this.st.inbox;
   },
 
+  // Upload the library right after works were imported, so a work is never removed from the
+  // inbox while it exists on this device only (a later pull from the other device would replace
+  // the local library and the work would be gone). Returns false, uploading nothing, when the
+  // other device has uploaded in the meantime: its snapshot is never overwritten from here.
+  async savedToCloud() {
+    if (!this.st.dirty) return true;                 // nothing here that the cloud lacks
+    const remote = await this.readIndex();
+    if (remote && remote.updatedAt !== this.st.base) return false;
+    await this.push(remote);
+    return true;
+  },
+
   // Import everything waiting in the inbox, then clear it
   async collectInbox() {
     const g = await this.api('/gists/' + await this.ensureInbox());
     const names = Object.keys(g.files).filter(n => /^in-.*\.html$/.test(n));
-    // A few at a time, each group removed from the inbox right after it is saved, so an
-    // interruption never loses a work and never imports more than the last group twice
+    // A few at a time, each group removed from the inbox right after it is saved (and uploaded),
+    // so an interruption never loses a work and never imports more than the last group twice
     // (and importing a book again only updates it).
     const total = { count: 0, updated: 0, added: 0 };
+    let kept = 0, unsynced = 0, skipped = 0;
     for (let i = 0; i < names.length; i += 5) {
       const group = names.slice(i, i + 5), sources = [];
       for (const n of group) {
         const text = await this.fileText(g.files[n]);
         if (text) { const book = Importer.parseText(text, '收到的作品'); sources.push({ book, label: book.title }); }
+        else skipped++;
       }
       const res = await importBooks(sources, false);
-      await this.patch(this.st.inbox, Object.fromEntries(group.map(n => [n, null])));
+      const retry = res.failed.filter(f => f.retry).length;
+      skipped += res.failed.length - retry;          // no text at all: nothing to retry, but say so
+      // A group that hit a storage error stays in the inbox, so nothing is lost and the next launch retries it
+      if (retry) kept += retry;
+      else if (!this.on || await this.savedToCloud()) await this.patch(this.st.inbox, Object.fromEntries(group.map(n => [n, null])));
+      else unsynced += group.length;                 // saved here, not yet uploaded: stays in the inbox too
       for (const k in total) total[k] += res[k];
     }
-    if (total.count) toast('收到作品：' + importSummary(total));
+    const msg = [];
+    if (kept) msg.push(`有 ${kept} 篇没能保存，先留在收件箱，下次打开再试`);
+    else if (unsynced) msg.push('收到的作品已存在本机，还没同步到云端，先留在收件箱，下次再试');
+    else if (total.count) msg.push('收到作品：' + importSummary(total));
+    if (skipped) msg.push(`${skipped} 篇没有正文，已跳过`);
+    if (msg.length) toast(msg.join(' · '));
     await this.writeShelfList(g.files['library.json']?.content);
   },
 

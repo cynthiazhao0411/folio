@@ -1,7 +1,7 @@
 // sw.js — Service worker for offline support
 // Online: network-first, so a new deployment is picked up on the next launch; responses are cached.
 // Offline: serve from cache so the app and imported books still work.
-const CACHE = 'folio-1.2.2';
+const CACHE = 'folio-1.2.3';
 const FILES = [
   './', 'index.html', 'style.css', 'app.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'library.js', 'sync.js', 'importer.js', 'formats.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js',
   'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'favicon.png',

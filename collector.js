@@ -40,6 +40,7 @@
       .h i { flex: 1 }
       .x { border: 0; background: none; font-size: 20px; color: #8a8178; padding: 0 4px; }
       .m { color: #6f665d; font-size: 13px; margin: 6px 0 10px; min-height: 1.5em; white-space: pre-line; }
+      .m em { font-style: normal; font-size: 11px; color: #a0522d; background: #ece3d2; border-radius: 999px; padding: 1px 8px; margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
       .r { display: flex; gap: 8px; flex-wrap: wrap; }
       button.b { flex: 1; border: 0; border-radius: 999px; padding: 9px 12px; font: inherit; font-size: 14px;
                  background: #e9e1d3; color: #2b2622; }
@@ -56,7 +57,20 @@
     </div>`;
   document.body.appendChild(host);
   const $ = s => shadow.querySelector(s);
-  const say = t => { $('.m').textContent = t; };
+  const say = (t, tag = '') => {
+    const m = $('.m');
+    m.textContent = '';
+    const [first, ...rest] = t.split('\n');
+    m.append(first);
+    if (tag) { const e = document.createElement('em'); e.textContent = tag; m.append(e); }
+    if (rest.length) m.append('\n' + rest.join('\n'));
+  };
+  // Just a few characters of the title: drop a leading 【tag】, keep 5 characters
+  const shortTitle = t => {
+    const s = String(t || '').replace(/^\s*[【\[［〔(（][^】\]］〕)）]{1,24}[】\]］〕)）]\s*/, '').trim() || String(t || '').trim();
+    const c = Array.from(s);
+    return c.length > 5 ? c.slice(0, 5).join('') + '…' : s;
+  };
   const progress = (i, n) => { $('.bar').style.display = n ? 'block' : 'none'; $('.bar i').style.width = n ? (i / n * 100) + '%' : 0; };
   const buttons = list => {
     $('.r').innerHTML = '';
@@ -156,7 +170,7 @@
   function finish(n, extra = '') {
     progress(0, 0);
     if (held.length) {
-      say(`已抓好 ${held.length} 篇。这个网站不让页面直接连到 GitHub，\n点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
+      say(`已抓好 ${held.length} 篇，但没能连到 GitHub（网络不稳，或这个网站不让页面连出去）。\n网络恢复后再点一次书签就能接着送；也可以点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
       buttons([['复制', async () => {
         await navigator.clipboard.writeText(JSON.stringify({ app: 'folio-bundle', items: held.map(h => ({ html: h.html })) }));
         const job = loadJob();
@@ -178,10 +192,16 @@
     for (const id of job.ids) {
       if (job.done.includes(id)) continue;
       const n = job.done.length + Object.keys(job.failed).length + 1;
-      say(`正在抓取 ${Math.min(n, total)} / ${total} …\n请保持这个页面打开。如果页面被刷新，再点一次书签就能接着送。`);
+      const hint = '\n请保持这个页面打开。如果页面被刷新，再点一次书签就能接着送。';
+      // On a list page the title is already on screen; otherwise it appears once the work is opened
+      let known = '';
+      try { known = shortTitle(blurbs.find(b => b.id === id)?.li.querySelector('h4.heading a[href*="/works/"]')?.textContent); } catch { /* not a list page */ }
+      say(`正在抓取 ${Math.min(n, total)} / ${total}${known ? '' : ' …'}` + hint, known);
       progress(n - 1, total);
       try {
-        if (await deliver(await fetchWork(id))) { job.done.push(id); sent++; }
+        const work = await fetchWork(id);
+        say(`正在抓取 ${Math.min(n, total)} / ${total}` + hint, shortTitle(work.title));
+        if (await deliver(work)) { job.done.push(id); sent++; }
         delete job.failed[id];
       } catch (e) {
         job.failed[id] = e.message;

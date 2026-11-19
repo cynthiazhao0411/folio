@@ -25,14 +25,14 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Library
 - **Continue reading**: a card at the top of the shelf reopens the book you were last reading.
-- **Phone layout**: three columns, with covers sized to the real space under the status bar so exactly three full rows fit the first screen.
+- **Phone layout**: three columns, with cover height sized to the real space under the status bar so exactly three full rows fit the first screen, and covers about 10% wider than that height alone would give (at least 18px between columns). The same rule serves every folder view; the last row keeps clear of the home indicator and the paper-colour pill.
 - **Paper colour on the shelf**: a small pill in the bottom corner switches light / green / night in one tap.
 - **Refresh**: syncs now, collects works waiting in the inbox and redraws the shelf.
 - **Cover colours**: each book keeps its own colour, handed out so the palette stays evenly used.
 - **Covers**: generated automatically, taken from an EPUB, or uploaded from your photos and cropped in a fixed 2:3 frame (drag, pinch or scroll to zoom).
 - **Catalog card**: long-press a book (right-click on desktop) to open its card. From there you can rate, set a status (unread / reading / finished), rename, move to a folder, edit tags, pin, change the cover, export as EPUB, view its stats, hide it or delete it.
 - **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete.
-- **Organisation**: folders, tags (with suggestions taken from the book's own metadata), pinned books first, hidden books, and filter chips.
+- **Organisation**: folders, tags (with suggestions taken from the book's own metadata), pinned books first and hidden books. The shelf's filter row shows "全部" and the folders; tags are set and managed on the catalog card and are not shown beside the folders.
 - **Updates, not duplicates**: importing a book again, in any format, updates its text and keeps your progress, notes, ratings and history. New chapters get a "新 +N 章" badge until you open the book.
 
 ### Reading records
@@ -44,6 +44,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Import and export
 - **Formats**: EPUB (EPUB 2 and 3, including covers and books split across files), PDF (text is rebuilt into paragraphs; running headers and page numbers are removed), structured HTML, saved web pages, plain HTML (split into chapters by headings), TXT (chapter detection; UTF-8 and GBK detected automatically), and ZIP files holding any of these. Several files can be picked at once.
+- **Reliable batches**: progress is shown while importing ("正在导入 3 / 20"). Each book is saved text first, record second, then read back; if any step fails that book is rolled back (or its previous version restored), so the shelf never holds a book without its text. Empty files and files with almost no text are rejected, and one summary states exactly how many books were added or updated and which files failed and why.
 - **Paste import**: paste one book's HTML, or a bundle of several, from the clipboard.
 - **EPUB export**: share any book as an EPUB 3 file.
 - **Backup and restore**: export every record (books, progress, notes, sessions, ratings) to one JSON file. Without sync, a gentle reminder appears after a week without a backup.
@@ -51,7 +52,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Sync and web collection
 - **Phone ↔ computer sync**: connect a GitHub personal access token with gist access on each device. The whole library is stored in your own secret gists; the device that changed last wins, so nothing is ever half-merged. Book text is uploaded only when it changes, and a book that is open is never replaced under you.
-- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. Batches are saved after every work, so if the page is reloaded, tapping the bookmark again continues with only the works that are left; the screen is kept awake while a batch runs. If a site blocks the connection, the bookmark copies the works to the clipboard instead.
+- **Collect bookmark**: Folio generates a bookmark for Safari or Chrome. On a work's page it sends that work to your shelf; on a list page it adds checkboxes so you can send several at once, pre-selecting ones on your shelf that have new chapters; "查更新" checks every unfinished book on your shelf for new chapters. Works travel through a private inbox gist and are imported the next time Folio opens. A work leaves the inbox only after it is saved on the device *and* uploaded to the sync gists, so a later sync from the other device can never replace a work that exists nowhere else; if that upload cannot happen, the work simply stays in the inbox and is picked up again (importing again only updates). Files in the inbox that contain no text are skipped with a notice. Batches are saved after every work, so if the page is reloaded, tapping the bookmark again continues with only the works that are left; the screen is kept awake while a batch runs. If a site blocks the connection, the bookmark copies the works to the clipboard instead.
 
 ## Technical notes
 
