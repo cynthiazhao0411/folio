@@ -4,7 +4,7 @@
 const CACHE = 'folio-1.2.3';
 const FILES = [
   './', 'index.html', 'style.css', 'app.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'library.js', 'sync.js', 'importer.js', 'formats.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js',
-  'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'favicon.png',
+  'fonts/NotoSerifSC-Regular.woff', 'fonts/NotoSerifSC-Medium.woff', 'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'favicon.png',
 ];
 
 self.addEventListener('install', e => {

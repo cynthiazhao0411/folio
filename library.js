@@ -688,13 +688,14 @@ const Library = {
     const cur = metas.every(m => m.folder === metas[0].folder) ? metas[0].folder : undefined;
     const count = f => this.books.filter(b => b.folder === f).length;
     const rows = this.folders().map(f => `<button class="pk-row${cur === f ? ' on' : ''}" data-f="${esc(f)}">${ICON.folder}<span>${esc(f)}</span><small>${count(f)}</small></button>`).join('');
+    // "New folder" is the first row, so it can never end up below the fold or behind the toolbar
     const s = quickSheet(`
-      <div class="pk-title">移动到文件夹</div>
+      <div class="pk-title">移动到文件夹<small>已选 ${ids.length} 本</small></div>
+      <div class="pk-foot"><button class="pk-row add" data-new="1">＋ 新建文件夹</button></div>
       <div class="pk-list sheet-scroll">
-        ${rows || '<div class="pk-empty">还没有文件夹</div>'}
+        ${rows || '<div class="pk-empty">还没有文件夹，先新建一个</div>'}
         ${metas.some(m => m.folder) ? `<button class="pk-row muted" data-f="">移出文件夹</button>` : ''}
-      </div>
-      <div class="pk-foot"><button class="pk-row add" data-new="1">＋ 新建文件夹</button></div>`, 'pk-folders');
+      </div>`, 'pk-folders');
     s.card.onclick = async e => {
       const row = e.target.closest('.pk-row');
       if (!row) return;
@@ -703,6 +704,9 @@ const Library = {
         f = await this.createFolder();
         if (!f) return;
       }
+      // A folder the selection leaves behind stays on the shelf even if it is now empty
+      const left = [...new Set(metas.map(m => m.folder).filter(x => x && x !== f))];
+      if (left.length) this.saveExtraFolders([...this.extraFolders(), ...left]);
       await s.close();
       await this.update(ids, m => { if (f) m.folder = f; else delete m.folder; });
       toast(f ? `已移到「${f}」` : '已移出文件夹');

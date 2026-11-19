@@ -31,7 +31,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Cover colours**: each book keeps its own colour, handed out so the palette stays evenly used.
 - **Covers**: generated automatically, taken from an EPUB, or uploaded from your photos and cropped in a fixed 2:3 frame (drag, pinch or scroll to zoom).
 - **Catalog card**: long-press a book (right-click on desktop) to open its card. From there you can rate, set a status (unread / reading / finished), rename, move to a folder, edit tags, pin, change the cover, export as EPUB, view its stats, hide it or delete it.
-- **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete.
+- **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete. The folder picker keeps "＋ 新建文件夹" as its first row (never behind the toolbar); a folder made there receives the selected books straight away, several folders can be created, and a folder emptied by a move stays on the shelf until you delete it.
 - **Organisation**: folders, tags (with suggestions taken from the book's own metadata), pinned books first and hidden books. The shelf's filter row shows "全部" and the folders; tags are set and managed on the catalog card and are not shown beside the folders.
 - **Updates, not duplicates**: importing a book again, in any format, updates its text and keeps your progress, notes, ratings and history. New chapters get a "新 +N 章" badge until you open the book.
 
@@ -75,6 +75,15 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 | `lib/` | [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0), loaded only when a PDF is imported; a traditional → simplified table generated from [OpenCC](https://github.com/BYVoid/OpenCC) (Apache-2.0) |
 
 Plain HTML, CSS and JavaScript: no framework, no build step.
+
+## Fonts and licence
+
+Folio's own interface (shelf, covers, front pages, The End, dialogs, menus, panels, footers) is set in **Noto Serif CJK SC** (Source Han Serif), loaded locally from `fonts/` with `@font-face`; no network font service is used.
+
+- `fonts/NotoSerifSC-Regular.woff` (400) and `fonts/NotoSerifSC-Medium.woff` (500-700, so headings never get a synthesised bold). Official Noto Serif CJK 2.002 outlines, subset to GB2312 + Latin + punctuation and converted to WOFF. Characters outside the subset fall back along `--ui-font`.
+- Licence: SIL Open Font License 1.1, copyright 2017-2023 Adobe. The full text is in `fonts/OFL.txt` and must stay with the font files.
+- Book text is not affected: the reader's text column keeps its own `--font` stack, and so do quoted passages of the book (highlight lists, note editor). `--ui-font` is for interface text only.
+- The service worker precaches both files, so the font also works offline.
 
 ## Run locally
 
