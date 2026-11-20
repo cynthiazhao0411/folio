@@ -79,7 +79,7 @@ input, textarea, select { font-family: inherit; }   /* form fields do not inheri
 .cover::before { content: ""; position: absolute; left: 8px; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.22); }
 .cover .c-mid { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; text-align: left; }
 .cover .c-title {
-  font-family: var(--folio-serif); font-size: 1.22em; font-weight: 600; line-height: 1.45; letter-spacing: .04em;
+  font-family: var(--folio-serif); font-size: 1.22em; font-weight: 400; line-height: 1.45; letter-spacing: .04em;   /* regular: only the cover page's title below the jacket is bold */
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
 .cover .c-rule { width: 1.6em; height: 1px; background: rgba(255,255,255,.55); margin-top: .9em; }
@@ -396,6 +396,10 @@ body.theme-night #sel-menu { background: #3a3a40; }
   position: absolute; right: 0; top: 50%; transform: translateY(-50%);
   background: none; border: 1px solid var(--line); color: var(--muted); font-size: .72em; padding: .35em .7em; border-radius: 2em;
 }
+/* Bookmark rows: the note and delete buttons sit in a row under the text */
+.li:has(.li-acts) { padding-right: 0; }
+.li-acts { display: flex; justify-content: flex-end; gap: .6em; margin-top: .5em; }
+.li-acts button { background: none; border: 1px solid var(--line); color: var(--muted); font-size: .72em; padding: .35em .8em; border-radius: 2em; }
 .list-empty { text-align: center; color: var(--muted); padding: 4em 0; line-height: 1.9; font-size: .9em; }
 .list-empty small { font-size: .82em; }
 .le-icon { font-size: 1.8em; margin-bottom: .3em; opacity: .7; }
@@ -725,6 +729,9 @@ body.theme-night .sheet-item.danger { color: #ff8a7a; }
 .bc-facts { display: flex; flex-wrap: wrap; gap: .3em 1em; margin-top: 14px; font-size: .74em; color: var(--muted); }
 .bc-place { display: flex; flex-wrap: wrap; align-items: center; gap: .3em .8em; width: 100%; color: var(--accent); }
 .bc-place svg { width: 13px; height: 13px; vertical-align: -2px; }
+/* System tags: outlined and muted, unlike the user's own #tags */
+.bc-sys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bc-sys span { font-size: .7em; letter-spacing: .08em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
 .bc-seg { position: relative; display: flex; margin-top: 14px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--line) 70%, transparent); }
 .bc-seg button { position: relative; z-index: 1; flex: 1; background: none; border: none; color: var(--muted); font-family: var(--font); font-size: .86em; padding: .5em 0; letter-spacing: .15em; transition: color .2s; }
 .bc-seg button.on { color: var(--fg); font-weight: 600; }

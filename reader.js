@@ -419,16 +419,18 @@ const Reader = {
       if (Date.now() - lastTouch < 800 || e.button !== 0) return;
       moved = false;
       if (this.sel || this.busy) return;                   // the click that follows clears the selection
-      // In the page margins, outside the text, a drag turns the page as it does with a finger
+      // In the empty page margins, a clear 16 px away from the text, a drag turns the page as it
+      // does with a finger; anywhere closer to the text the mouse selects text
       const pad = parseFloat(this.views[this.top].flow.style.getPropertyValue('--pad')) || 24;
       const ex = e.clientX - this.el.stack.getBoundingClientRect().left, W = this.W();
-      if (this.turnMode === 'curl' && (ex < pad + 12 || ex > W - pad - 12)) { medge = { x: e.clientX, y: e.clientY, dir: ex > W / 2 ? 1 : -1 }; return; }
+      if (this.turnMode === 'curl' && pad > 32 && (ex < pad - 16 || ex > W - pad + 16)) { medge = { x: e.clientX, y: e.clientY, dir: ex > W / 2 ? 1 : -1 }; return; }
       mdown = { x: e.clientX, y: e.clientY };
       mpress = setTimeout(startMouseSelect, 450);
     });
     window.addEventListener('mousemove', e => {
       if (medge) {
-        if (!mdrag && Math.abs(e.clientX - medge.x) > 6) { mdrag = startCurl(medge.dir, medge.x, medge.y); if (!mdrag) medge = null; else moved = true; }
+        const ddx = Math.abs(e.clientX - medge.x), ddy = Math.abs(e.clientY - medge.y);
+        if (!mdrag && ddx > 10 && ddx > ddy) { mdrag = startCurl(medge.dir, medge.x, medge.y); if (!mdrag) medge = null; else moved = true; }
         if (mdrag) moveCurl(mdrag, e.clientX, e.clientY);
         return;
       }
@@ -617,7 +619,8 @@ const Reader = {
       <div class="li" data-ch="${a.ch}" data-off="${a.start}">
         <div class="li-top"><span>${chName(a.ch)}</span><span>${date(a.createdAt)}</span></div>
         <div class="li-text">${escapeHtml(a.text)}…</div>
-        <button class="li-del" data-del="${a.id}" aria-label="删除">删除</button>
+        ${a.note ? `<div class="li-note">${escapeHtml(a.note)}</div>` : ''}
+        <div class="li-acts"><button data-bmnote="${a.id}">${a.note ? '改备注' : '加备注'}</button><button data-del="${a.id}" aria-label="删除">删除</button></div>
       </div>`).join('') : empty('🔖', '还没有书签<br><small>阅读时点顶部的书签按钮添加</small>');
     const noteList = marks.length ? marks.map(a => `
       <div class="li" data-ch="${a.ch}" data-off="${a.start}" data-id="${a.id}">
@@ -673,7 +676,23 @@ const Reader = {
       setTab(t.dataset.tab);
       if (t.dataset.tab === 'toc' && cur) list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.offsetHeight / 2;
     };
-    modal.querySelectorAll('[data-pane]').forEach(pane => pane.onclick = e => {
+    modal.querySelectorAll('[data-pane]').forEach(pane => pane.onclick = async e => {
+      // A bookmark's note: one line kept in the bookmark's own record (rec.note, with the
+      // earlier texts in rec.notes), so it syncs and backs up with it; its position is untouched
+      const bn = e.target.closest('[data-bmnote]');
+      if (bn) {
+        const rec = this.annots.find(a => a.id === bn.dataset.bmnote);
+        if (!rec) return;
+        const v = await promptDialog({ title: '书签备注', value: rec.note || '', placeholder: '写一句话，比如为什么在这里停下', ok: '保存', max: 80 });
+        if (v === null || v === rec.note) return;
+        this.updateAnnot(rec, { note: v });
+        const item = bn.closest('.li');
+        let line = item.querySelector('.li-note');
+        if (!line) { line = document.createElement('div'); line.className = 'li-note'; item.querySelector('.li-text').after(line); }
+        line.textContent = v;
+        bn.textContent = '改备注';
+        return;
+      }
       const del = e.target.closest('[data-del]');
       if (del) {
         const item = del.closest('.li');

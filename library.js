@@ -153,6 +153,23 @@ function statusOf(b) {
 }
 const STATUS_NAMES = { unread: '未读', reading: '在读', done: '读完' };
 
+// System tags, worked out from the book and its reading record whenever they are shown and never
+// stored, so they can't overwrite or remove the user's own tags (m.userTags) and are always current.
+//   length:  短篇 under 30,000 characters, 中篇 under 100,000, 长篇 from 100,000
+//   state:   完结 / 连载 from the work's "Chapters: n/total" line ("?" = still updating);
+//            without that line, 完结 only when the title says so
+//   重读:    finished twice or more, or finished once and being read again
+function systemTags(b) {
+  const out = [], w = b.words || 0;
+  if (w) out.push(w < 30000 ? '短篇' : w < 100000 ? '中篇' : '长篇');
+  const stats = Object.entries(b.tags || {}).find(([k]) => /stat/i.test(k))?.[1]?.[0] || '';
+  const ch = String(stats).match(/Chapters:\s*(\d+)\s*\/\s*(\d+|\?)/);
+  if (ch) out.push(ch[2] !== '?' && ch[1] === ch[2] ? '完结' : '连载');
+  else if (/完结|完本|全文完/.test(b.title || '')) out.push('完结');
+  if ((b.reads || 0) >= 2 || (b.reads && b.run?.ms > 0 && !b.run.counted)) out.push('重读');
+  return out;
+}
+
 // How many times a book has been read: finished read-throughs (m.reads, see checkFinished), and
 // the one under way, if any. Opening, reloading or jumping around never changes it.
 function readsRow(b) {
@@ -556,6 +573,7 @@ const Library = {
           </div>
         </div>
         ${readsRow(b)}
+        ${systemTags(b).length ? `<div class="bc-sys" title="系统标签：按字数、连载状态和阅读记录自动生成">${systemTags(b).map(t => `<span>${t}</span>`).join('')}</div>` : ''}
         ${facts.length || place.length ? `<div class="bc-facts">${facts.map(f => `<span>${f}</span>`).join('')}${place.length ? `<div class="bc-place">${place.join('')}</div>` : ''}</div>` : ''}
         <div class="bc-seg">
           <i class="bc-seg-ind"></i>

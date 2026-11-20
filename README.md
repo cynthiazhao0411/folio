@@ -21,6 +21,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Character-precise selection**: long-press (or click and drag on desktop) to select, with drag handles, a live character count and a floating menu at the end of the selection. Every character is measured (including the first one of a wrapped line, which WebKit reports with an extra empty box), the pointer is matched to a line first and then to the nearest character on it, and a drag that starts beside a handle moves that handle.
 - **Highlights and notes**: four highlight colours and notes with timestamps. Writing a note on plain text highlights it automatically. Tap any highlight to change its colour, copy it, edit it or delete it. Every saved version of a note is kept with its time.
 - **Bookmarks**: pull the page down to add or remove one, or tap the ribbon to remove it.
+- **Bookmark notes**: in the bookmarks list, 加备注 / 改备注 attaches one line to a bookmark. The note is kept on the bookmark's own record with its earlier versions, so it syncs and backs up with it; the bookmark's place and the reading progress are not touched.
 - **One panel for everything**: contents, bookmarks and notes live in a single slide-up panel, and each entry jumps straight to its place.
 
 ### Library
@@ -33,6 +34,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Catalog card**: long-press a book (right-click on desktop) to open its card. From there you can rate, set a status (unread / reading / finished), rename, move to a folder, edit tags, pin, change the cover, export as EPUB, view its stats, hide it or delete it.
 - **Multi-select**: batch pin, move, tag, set covers, hide, change status or delete. The folder picker keeps "＋ 新建文件夹" as its first row (never behind the toolbar); a folder made there receives the selected books straight away, several folders can be created, and a folder emptied by a move stays on the shelf until you delete it.
 - **Organisation**: folders, tags (with suggestions taken from the book's own metadata), pinned books first and hidden books. The shelf's filter row shows "全部" and the folders; tags are set and managed on the catalog card and are not shown beside the folders.
+- **System tags**: the catalog card shows 短篇 / 中篇 / 长篇 (under 30,000 characters / under 100,000 / longer), 完结 / 连载 (from the work's chapter count, e.g. 12/12 or 12/?) and 重读 (finished twice, or finished once and being read again). They are worked out each time from the book and its reading record, never stored, and shown apart from your own #tags, which they never change.
 - **Updates, not duplicates**: importing a book again, in any format, updates its text and keeps your progress, notes, ratings and history. New chapters get a "新 +N 章" badge until you open the book.
 
 ### Reading records
