@@ -22,7 +22,7 @@ const Reader = {
 
   init() {
     const $ = id => document.getElementById(id);
-    this.el = { reader: $('reader'), stack: $('stack'), back: $('curl-back'), shadow: $('curl-shadow'),
+    this.el = { reader: $('reader'), stack: $('stack'), shadow: $('curl-shadow'),
                 title: $('book-title'), toc: $('toc-panel'), note: $('note-panel'),
                 selLayer: $('sel-layer'), selMenu: $('sel-menu'), noteEditor: $('note-editor'), btnBookmark: $('btn-bookmark'),
                 pull: $('pull-ind') };
@@ -130,6 +130,7 @@ const Reader = {
     const v = this.views[this.top];
     v.layout = -1;
     this.views[1 - this.top].layout = -1;
+    if (this.backV) this.backV.layout = -1;
     this.ensure(v, this.ch);
     const box = v.flow.querySelector(`.an[data-key="${CSS.escape(key)}"]`);
     const page = box ? Math.floor((box.offsetLeft + 1) / this.W()) : this.page;
@@ -191,7 +192,7 @@ const Reader = {
   stackOrder() {
     this.views.forEach((v, i) => {
       v.el.style.zIndex = i === this.top ? 2 : 1;
-      v.el.style.transform = v.inner.style.transform = '';
+      v.el.style.transform = v.inner.style.transform = v.el.style.clipPath = '';
     });
   },
 
@@ -205,14 +206,14 @@ const Reader = {
     return this.page > 0 ? [this.ch, this.page - 1] : [this.ch - 1, 'last'];
   },
 
-  turn(dir) {
+  turn(dir, y) {
     if (this.sel) this.clearSel();
     if (this.busy || !this.canStep(dir)) return;
-    if (this.turnMode === 'curl') this.finishCurl(this.beginCurl(dir), true);
+    if (this.turnMode === 'curl') this.finishCurl(this.beginCurl(dir, y), true, true);
     else this.slide(dir);
   },
-  next() { this.turn(+1); },
-  prev() { this.turn(-1); },
+  next(y) { this.turn(+1, y); },
+  prev(y) { this.turn(-1, y); },
 
   // Slide mode: animate within a chapter, jump across chapters
   slide(dir) {
@@ -238,50 +239,115 @@ const Reader = {
   },
 
   // ================= Page curl =================
-  beginCurl(dir) {
+  // Geometry (page W × H, spine at x = 0): C is the point of the free edge that is lifted (a
+  // corner, or a point in the middle of the edge) and P is where it is now. The fold is the
+  // perpendicular bisector of C–P. The part of the page on C's side of the fold is lifted,
+  // turned over, and lies reflected across the fold, showing the back of the paper: the same
+  // page mirrored, faintly through the paper (a third sheet, backV). The page underneath shows
+  // where the lifted part was, with a shadow along the fold.
+  //   forward:  the current page turns away, P goes from C to C mirrored over the spine (-W)
+  //   backward: the previous page lies turned over and comes back, P goes from -W to C
+  // Everything moves by transforms and clip paths only: the text itself is never repainted.
+  curlSheet() {
+    if (this.backV) return this.backV;
+    const el = this.views[0].el.cloneNode(true);
+    el.classList.add('curl-sheet');
+    el.querySelector('.flow').innerHTML = ''; el.querySelector('.title-page').innerHTML = '';
+    el.querySelector('.end-page')?.remove();
+    el.insertAdjacentHTML('beforeend', '<div class="curl-paper"></div><div class="curl-sheen"></div>');
+    this.el.stack.appendChild(el);
+    this.backV = { el, inner: el.querySelector('.view-inner'), flow: el.querySelector('.flow'), header: el.querySelector('.header'),
+      footer: el.querySelector('.footer'), titlePage: el.querySelector('.title-page'), sheen: el.querySelector('.curl-sheen'),
+      ch: -1, layout: -1, pages: 1 };
+    return this.backV;
+  },
+
+  // dir: +1 forward, -1 backward. y: height of the point that is lifted (taps and drags start
+  // where the finger is); near the top or bottom the corner itself is lifted.
+  beginCurl(dir, y) {
     this.busy = true;
-    const W = this.W();
+    const W = this.W(), H = this.el.stack.clientHeight;
     const oldV = this.views[this.top], newV = this.views[1 - this.top];
     const [ch, page] = this.target(dir);
     const dest = this.show(newV, ch, page);          // prepare the destination page on the hidden sheet
-    const moving = dir > 0 ? oldV : newV;            // forward curls the old page away; backward curls the new page in
-    const fixed = dir > 0 ? newV : oldV;
-    moving.el.style.zIndex = 3; fixed.el.style.zIndex = 1;
-    this.el.back.style.display = this.el.shadow.style.display = 'block';
-    const c = { dir, W, dest, oldV, newV, moving, edge: dir > 0 ? W : -W };
-    this.drawCurl(c, c.edge);
+    const moving = dir > 0 ? oldV : newV, fixed = dir > 0 ? newV : oldV;
+    const back = this.curlSheet();
+    this.show(back, dir > 0 ? this.ch : dest.ch, dir > 0 ? this.page : dest.page);    // the back of the turning page
+    fixed.el.style.zIndex = 1; this.el.shadow.style.zIndex = 2; moving.el.style.zIndex = 3; back.el.style.zIndex = 4;
+    this.el.shadow.style.display = 'block';
+    y = y ?? H * .62;
+    const cy = y < H * .22 ? 0 : y > H * .78 ? H : Math.max(H * .1, Math.min(H * .9, y));
+    const c = { dir, W, H, dest, oldV, newV, moving, back, cy, rest: [W, cy], away: [-W, cy] };
+    c.p = dir > 0 ? [...c.rest] : [...c.away];
+    this.drawCurl(c, c.p);
     return c;
   },
 
-  // edge = x-position of the page's free edge: W = flat, -W = fully turned. The fold sits halfway between edge and spine.
-  drawCurl(c, edge) {
-    const W = c.W, fold = (W + edge) / 2, flap = Math.max(0, fold - edge);
-    c.edge = edge;
-    // Counter-translate outer and inner: content stays put, only the area left of the fold is visible
-    c.moving.el.style.transform = `translate3d(${fold - W}px,0,0)`;
-    c.moving.inner.style.transform = `translate3d(${W - fold}px,0,0)`;
-    this.el.back.style.transform = `translate3d(${edge}px,0,0) scaleX(${flap / W})`;
-    this.el.shadow.style.transform = `translate3d(${fold}px,0,0)`;
-    this.el.shadow.style.opacity = Math.min(1, flap / 50);
+  // The lifted point can't tear the paper from the spine: it stays within reach of the spine
+  constrain(c, [x, y]) {
+    const { W, H, cy } = c;
+    const fit = (ax, ay, R) => { const dx = x - ax, dy = y - ay, d = Math.hypot(dx, dy); if (d > R) { x = ax + dx * R / d; y = ay + dy * R / d; } };
+    fit(0, cy, W);
+    if (cy === 0 || cy === H) fit(0, H - cy, Math.hypot(W, H));
+    return [Math.min(x, W), y];
   },
 
-  finishCurl(c, complete) {
-    const start = c.dir > 0 ? c.W : -c.W;
-    const from = c.edge, to = complete ? -start : start;
-    // A tap turns the page from rest: ease-in-out, like lifting and laying down paper.
-    // After a drag the page is already moving: ease-out from the finger's position.
-    const fromRest = Math.abs(from - start) < 1;
-    const dist = Math.abs(to - from) / (2 * c.W);
-    const dur = fromRest ? 460 : 200 + dist * 260;
-    const ease = fromRest
+  drawCurl(c, p) {
+    const [px, py] = c.p = this.constrain(c, p);
+    const { W, H, cy, moving, back } = c;
+    const nx = W - px, ny = cy - py, len = Math.hypot(nx, ny);
+    if (len < .5) {                                   // flat
+      moving.el.style.clipPath = ''; back.el.style.visibility = ''; this.el.shadow.style.opacity = 0;
+      return;
+    }
+    const ux = nx / len, uy = ny / len, mx = (W + px) / 2, my = (cy + py) / 2;
+    // The page rectangle cut by the fold: `kept` lies flat, `flap` is lifted
+    const side = (x, y) => (x - mx) * ux + (y - my) * uy;
+    const corners = [[0, 0], [W, 0], [W, H], [0, H]], kept = [], flap = [];
+    let depth = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i], b = corners[(i + 1) % 4], sa = side(...a), sb = side(...b);
+      (sa > 0 ? flap : kept).push(a);
+      if (sa > 0) depth = Math.max(depth, sa);
+      if ((sa > 0) !== (sb > 0)) {
+        const t = sa / (sa - sb), q = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        kept.push(q); flap.push(q);
+      }
+    }
+    const poly = pts => pts.length ? `polygon(${pts.map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(',')})` : 'polygon(0 0)';
+    moving.el.style.clipPath = poly(kept);
+    // The back: the same page reflected across the fold, cut to the lifted part
+    const k = 2 * (mx * ux + my * uy);
+    back.el.style.visibility = 'visible';
+    back.el.style.transform = `matrix(${1 - 2 * ux * ux},${-2 * ux * uy},${-2 * ux * uy},${1 - 2 * uy * uy},${k * ux},${k * uy})`;
+    back.el.style.clipPath = poly(flap);
+    // Curvature of the paper on the back, and the shadow it casts along the fold
+    const ang = Math.atan2(uy, ux) * 180 / Math.PI;
+    back.sheen.style.transform = `translate3d(${mx}px,${my}px,0) rotate(${ang}deg) translateY(-50%) scaleX(${Math.max(1, depth) / 100})`;
+    const lift = Math.min(1, len / (W * .35));
+    this.el.shadow.style.opacity = .35 + .65 * lift;
+    this.el.shadow.style.transform = `translate3d(${mx}px,${my}px,0) rotate(${ang}deg) translateY(-50%) scaleX(${(14 + Math.min(70, depth * .28)) / 100})`;
+  },
+
+  // Let go: finish the turn (complete) or lay the page back. `fromTap` turns a resting page in
+  // one movement that lifts the point a little on the way, like a hand flipping a page.
+  finishCurl(c, complete, fromTap = false, velocity = 0) {
+    const from = [...c.p];
+    const to = (c.dir > 0) === complete ? c.away : c.rest;
+    const dist = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    const speed = Math.max(Math.abs(velocity), 1.6);                 // px per ms
+    const dur = fromTap ? 560 : Math.max(170, Math.min(480, dist / speed));
+    const ease = fromTap
       ? t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
       : t => 1 - Math.pow(1 - t, 3);
+    const arc = fromTap ? (c.cy === c.H ? -1 : c.cy === 0 ? 1 : 0) * c.H * .1 : 0;
     const t0 = performance.now();
     const tick = now => {
-      const t = Math.min(1, (now - t0) / dur);
-      this.drawCurl(c, from + (to - from) * ease(t));
+      const t = Math.min(1, (now - t0) / dur), e = ease(t);
+      this.drawCurl(c, [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e + arc * Math.sin(Math.PI * t)]);
       if (t < 1) return requestAnimationFrame(tick);
-      this.el.back.style.display = this.el.shadow.style.display = 'none';
+      c.back.el.style.visibility = ''; this.el.shadow.style.display = 'none';
+      c.back.el.style.clipPath = c.moving.el.style.clipPath = '';
       if (complete) {
         this.top = this.views.indexOf(c.newV);
         this.commit(c.dest);
@@ -297,10 +363,43 @@ const Reader = {
     const area = this.el.stack;
     let x0 = 0, y0 = 0, drag = null, moved = false, decided = false, press = null, pulling = false;
 
+    // A drag turning a page: the lifted point follows the finger (or mouse) from where it went
+    // down; turning back starts from the page lying turned over, so it moves twice as fast.
+    // Drawing waits for the next animation frame; the last 100 ms give the speed at release.
+    let raf = 0, track = [];
+    const startCurl = (dir, x, y) => {
+      if (this.turnMode !== 'curl' || this.busy || !this.canStep(dir)) return null;
+      const top = this.el.stack.getBoundingClientRect().top;
+      const c = this.beginCurl(dir, y - top);
+      c.start = [x, y]; c.base = [...c.p]; c.kx = dir > 0 ? 1 : 2;
+      track = [[performance.now(), x]];
+      return c;
+    };
+    const moveCurl = (c, x, y) => {
+      c.want = [c.base[0] + (x - c.start[0]) * c.kx, c.base[1] + (y - c.start[1])];
+      const now = performance.now();
+      track.push([now, x]);
+      while (track.length > 2 && now - track[0][0] > 100) track.shift();
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (c.want && this.busy) this.drawCurl(c, c.want); });
+    };
+    const endCurl = c => {
+      cancelAnimationFrame(raf); raf = 0;
+      if (c.want) this.drawCurl(c, c.want);
+      const [t0, x0] = track[0], [t1, x1] = track[track.length - 1];
+      const vx = t1 > t0 ? (x1 - x0) / (t1 - t0) : 0;                 // px per ms, + = rightwards
+      const W = c.W, px = c.p[0];
+      const complete = c.dir > 0 ? vx < -.25 || (vx < .25 && px < W * .62)
+                                 : vx > .25 || (vx > -.25 && px > -W * .35);
+      this.finishCurl(c, complete, false, vx * c.kx);
+    };
+
+    let grab = null;          // a drag that started next to a selection handle moves that end
     area.addEventListener('touchstart', e => {
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
       moved = decided = pulling = false; drag = null;
       clearTimeout(press);
+      grab = e.touches.length === 1 ? this.nearHandle(x0, y0) : null;
+      if (grab) { this.dragging = grab; this.hideSelMenu(); return; }
       // Long press (450 ms without moving) starts a text selection
       if (e.touches.length === 1 && !this.busy && !this.sel) press = setTimeout(() => {
         if (moved || drag) return;
@@ -310,7 +409,7 @@ const Reader = {
     // ---- Mouse (desktop testing) ----
     // Drag to select text, or hold still for 450 ms to select the phrase under the pointer.
     // Browsers also fire compatibility mouse events after a touch, so those are ignored.
-    let lastTouch = 0, mdown = null, mpress = null;
+    let lastTouch = 0, mdown = null, mpress = null, medge = null, mdrag = null;
     const startMouseSelect = () => {
       if (!mdown || !this.beginSelect(mdown.x, mdown.y)) return false;
       this.selecting = true; moved = true; this.closeMenu();
@@ -320,10 +419,19 @@ const Reader = {
       if (Date.now() - lastTouch < 800 || e.button !== 0) return;
       moved = false;
       if (this.sel || this.busy) return;                   // the click that follows clears the selection
+      // In the page margins, outside the text, a drag turns the page as it does with a finger
+      const pad = parseFloat(this.views[this.top].flow.style.getPropertyValue('--pad')) || 24;
+      const ex = e.clientX - this.el.stack.getBoundingClientRect().left, W = this.W();
+      if (this.turnMode === 'curl' && (ex < pad + 12 || ex > W - pad - 12)) { medge = { x: e.clientX, y: e.clientY, dir: ex > W / 2 ? 1 : -1 }; return; }
       mdown = { x: e.clientX, y: e.clientY };
       mpress = setTimeout(startMouseSelect, 450);
     });
     window.addEventListener('mousemove', e => {
+      if (medge) {
+        if (!mdrag && Math.abs(e.clientX - medge.x) > 6) { mdrag = startCurl(medge.dir, medge.x, medge.y); if (!mdrag) medge = null; else moved = true; }
+        if (mdrag) moveCurl(mdrag, e.clientX, e.clientY);
+        return;
+      }
       if (!mdown) return;
       if (this.selecting) return this.extendSelect(e.clientX, e.clientY);
       if (Math.hypot(e.clientX - mdown.x, e.clientY - mdown.y) > 6) {
@@ -333,6 +441,7 @@ const Reader = {
       }
     });
     window.addEventListener('mouseup', () => {
+      if (medge) { medge = null; if (mdrag) { endCurl(mdrag); mdrag = null; } return; }
       clearTimeout(mpress);
       if (!mdown) return;
       mdown = null;
@@ -341,6 +450,7 @@ const Reader = {
 
     area.addEventListener('touchmove', e => {
       e.preventDefault();                                  // prevent scrolling and rubber-banding
+      if (grab) { moved = true; return this.moveEnd(grab, e.touches[0].clientX, e.touches[0].clientY); }
       if (this.selecting) return this.extendSelect(e.touches[0].clientX, e.touches[0].clientY);
       const dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0;
       if (pulling) return this.pullMove(dy);
@@ -359,23 +469,20 @@ const Reader = {
         }
         moved = true;
         this.closeMenu();
-        const dir = dx < 0 ? 1 : -1;
-        if (this.turnMode === 'curl' && !this.busy && this.canStep(dir)) drag = this.beginCurl(dir);
+        drag = startCurl(dx < 0 ? 1 : -1, x0, y0);
       }
-      if (drag) {
-        const W = drag.W, edge = (drag.dir > 0 ? W : -W) + dx * 2;
-        this.drawCurl(drag, Math.max(-W, Math.min(W, edge)));
-      }
+      if (drag) moveCurl(drag, e.touches[0].clientX, e.touches[0].clientY);
     }, { passive: false });
 
     area.addEventListener('touchend', e => {
       clearTimeout(press);
       lastTouch = Date.now();
+      if (grab) { grab = null; return this.endMove(); }
       if (this.selecting) { this.selecting = false; this._selEnded = Date.now(); return this.showSelMenu(); }
       const dx = e.changedTouches[0].clientX - x0;
       if (pulling) { pulling = false; return this.pullEnd(); }
       if (drag) {
-        this.finishCurl(drag, drag.dir > 0 ? dx < -30 : dx > 30);
+        endCurl(drag);
         drag = null;
       } else if (moved && this.turnMode !== 'curl' && Math.abs(dx) > 30) {
         dx < 0 ? this.next() : this.prev();
@@ -398,9 +505,9 @@ const Reader = {
       if (an && (e.target.closest('.an-more') || an.classList.contains('folded'))) return this.toggleNote(an.dataset.key);
       if (e.target.closest('a')) return;
       if (this.el.reader.classList.contains('menu-open')) return this.closeMenu();
-      const x = e.clientX / innerWidth;
-      if (x < 0.32) this.prev();
-      else if (x > 0.68) this.next();
+      const x = e.clientX / innerWidth, y = e.clientY - this.el.stack.getBoundingClientRect().top;
+      if (x < 0.32) this.prev(y);
+      else if (x > 0.68) this.next(y);
       else this.el.reader.classList.add('menu-open');
     });
 

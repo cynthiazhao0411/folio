@@ -74,10 +74,13 @@ async function openBook(id, fromCover) {
     reader.style.opacity = '0';                                // lay out invisibly first
     Reader.open({ ...meta, chapters: content.chapters }, meta.progress);
     if (!meta.words) { meta.words = Reader.wordCount; DB.putMeta(meta); }   // books imported before word counts existed
+    if (meta.est?.chapters?.length !== content.chapters.length || meta.est?.speed !== READ_SPEED) { meta.est = estimateBook(content.chapters); DB.putMeta(meta); }
     if (meta.t2s === undefined) { meta.t2s = Reader.t2s; DB.putMeta(meta); }  // remember the script detection
     t2sLabel();
     Clock.start(id);
     Session.begin(meta);
+    const run = currentRun(meta);                          // the read-through this opening belongs to
+    if (!run.start) { run.start = Session.cur.start; DB.putMeta(meta); }
     const cover = fromCover || document.querySelector(`.card[data-id="${CSS.escape(id)}"] .cover`);
     if (cover) await BookAnim.open(cover, reader);
     else await BookAnim.fadeIn(reader);
@@ -185,8 +188,15 @@ Clock.onFlush = async (bookId, ms) => {
   const m = current?.id === bookId ? current : await DB.getMeta(bookId);
   if (!m) return;
   m.readMs = (m.readMs || 0) + ms;
-  (m.run || (m.run = { ms: 0, counted: false })).ms += ms;
-  if (checkFinished(m)) celebrate(m);
+  const run = currentRun(m);
+  run.ms += ms;
+  if (!run.start) run.start = Date.now() - ms;
+  if (checkFinished(m)) {
+    // The finished read-through: how many times the book was opened for it, from the session records
+    const r = m.readThroughs[m.readThroughs.length - 1];
+    try { const o = await countOpens(m.id, r.start, r.end); r.opens = o.opens; r.start = r.start || o.first; } catch { /* the count is extra */ }
+    celebrate(m);
+  }
   await DB.putMeta(m);
   await Session.touch(m, ms);
 };
@@ -304,7 +314,7 @@ async function importBooks(sources, open = true, onProgress) {
       const { chapters, ...info } = book;
       // Re-importing a book keeps everything you did with it on the shelf
       const keep = {};
-      for (const k of ['readMs', 'reads', 'run', 'finished', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
+      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
         if (old?.[k] !== undefined) keep[k] = old[k];
       for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
         if (old?.[k] !== undefined) keep[k] = old[k];
@@ -323,6 +333,7 @@ async function importBooks(sources, open = true, onProgress) {
         versions,
         chapterCount: chapters.length,
         words,
+        est: estimateBook(chapters),
         addedAt: old?.addedAt || Date.now(),
         lastReadAt: old?.lastReadAt,
         progress: old?.progress,
@@ -656,4 +667,20 @@ setTimeout(async () => {
     localStorage.setItem('folio-backup-asked', Date.now());
     toast('一周没备份了：可以在「⋯」里备份或开启设备同步');
   }
+}, 4000);
+
+// Books imported before estimated reading times existed get theirs once, a few at a time, in the background
+setTimeout(async function backfillEstimates() {
+  try {
+    for (const m of await DB.allMeta()) {
+      if (m.est?.speed === READ_SPEED && m.est.chapters?.length === m.chapterCount) continue;
+      const c = await DB.getContent(m.id);
+      if (!c?.chapters?.length) continue;
+      const fresh = await DB.getMeta(m.id);                 // the record as it is now, not as it was listed
+      if (!fresh) continue;
+      fresh.est = estimateBook(c.chapters);
+      await DB.putMeta(fresh);
+      await new Promise(r => setTimeout(r, 30));
+    }
+  } catch (e) { console.warn('estimates:', e); }
 }, 4000);

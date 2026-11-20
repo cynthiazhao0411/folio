@@ -153,17 +153,33 @@ function statusOf(b) {
 }
 const STATUS_NAMES = { unread: '未读', reading: '在读', done: '读完' };
 
+// How many times a book has been read: finished read-throughs (m.reads, see checkFinished), and
+// the one under way, if any. Opening, reloading or jumping around never changes it.
+function readsRow(b) {
+  const n = b.reads || 0, pct = Math.round(b.progress?.pct || 0);
+  const spent = b.run?.ms >= 60000 ? ` · 这一遍已读 ${fmtDur(b.run.ms, true)}` : '';
+  const now = b.run?.counted ? (pct >= 10 ? '' : `重读中 · 读到 ${pct}%`)       // finished this round already
+    : (b.run?.ms || (pct > 0 && pct < 100)) ? `第 ${n + 1} 遍 · 读到 ${Math.max(1, pct)}%${spent}` : '';
+  return `<button class="bc-reads" data-act="stats">
+    <span class="bc-reads-n">${n ? `读完 <b>${n}</b> 遍` : '还没读完过'}</span>
+    <span class="bc-reads-now">${now || (n ? '' : '还没开始读')}</span>
+    <i>读完记录 ›</i>
+  </button>`;
+}
+
 // Setting a status by hand. The first time a book is marked 读完 by hand it also
 // counts as one read-through (unless the current read-through was already counted).
 function applyStatus(m, s) {
   m.status = s;
   if (s === 'done' && !m.manualCounted) {
     m.manualCounted = true;
-    const run = m.run || (m.run = { ms: 0, counted: false });
+    const run = m.run || (m.run = newRun());
     if (!run.counted) {
       run.counted = true;
       m.reads = (m.reads || 0) + 1;
-      (m.finished || (m.finished = [])).push(Date.now());
+      const now = Date.now();
+      (m.finished || (m.finished = [])).push(now);
+      (m.readThroughs || (m.readThroughs = [])).push({ n: m.reads, start: run.start, end: now, ms: Math.round(run.ms || 0), opens: null, est: Math.round(estimateMs(m)), manual: true });
     }
   }
 }
@@ -425,7 +441,7 @@ const Library = {
     grid.innerHTML = list.map(b => {
       if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
       const st = statusOf(b), pct = b.progress?.pct || 0;
-      const sub = st === 'done' ? (b.reads > 1 ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
+      const sub = st === 'done' ? (b.reads ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
       return `
         <div class="card${this.selected.has(b.id) ? ' picked' : ''}" data-id="${esc(b.id)}">
           <div class="card-cover">
@@ -519,9 +535,8 @@ const Library = {
     navigator.vibrate?.(8);
     const st = statusOf(b);
     const facts = [
-      st === 'reading' && b.progress?.pct ? `读到 ${Math.round(b.progress.pct)}%` : '',
       b.readMs ? `已读 ${fmtDur(b.readMs, true)}` : '',
-      b.reads ? `读完 ${b.reads} 遍` : '',
+      estimateMs(b) > 0 ? `预计 ${fmtDur(estimateMs(b), true)}` : '',
       b.words ? (b.words >= 10000 ? (b.words / 10000).toFixed(1) + ' 万字' : b.words + ' 字') : '',
     ].filter(Boolean);
     const place = [b.folder ? `${ICON.folder}<span>${esc(b.folder)}</span>` : '', ...(b.userTags || []).slice(0, 3).map(t => `<span>#${esc(t)}</span>`)].filter(Boolean);
@@ -540,6 +555,7 @@ const Library = {
             <div class="bc-stars" aria-label="评分">${[1, 2, 3, 4, 5].map(n => `<button data-rate="${n}" class="${n <= starCount(b.rating) ? 'on' : ''}">★</button>`).join('')}</div>
           </div>
         </div>
+        ${readsRow(b)}
         ${facts.length || place.length ? `<div class="bc-facts">${facts.map(f => `<span>${f}</span>`).join('')}${place.length ? `<div class="bc-place">${place.join('')}</div>` : ''}</div>` : ''}
         <div class="bc-seg">
           <i class="bc-seg-ind"></i>

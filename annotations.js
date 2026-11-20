@@ -124,6 +124,7 @@ Object.assign(Reader, {
     const v = this.views[this.top];
     v.layout = -1;
     this.views[1 - this.top].layout = -1;
+    if (this.backV) this.backV.layout = -1;            // the back of a turning page shows the marks too
     this.commit(this.show(v, this.ch, this.page));
   },
 
@@ -150,7 +151,7 @@ Object.assign(Reader, {
     const [rec] = this.annots.splice(i, 1);
     this.store?.del(id);
     if (rec.type === 'mark' && rec.ch === this.ch) this.refreshMarks();
-    else this.views.forEach(v => { if (v.ch === rec.ch) v.layout = -1; });
+    else [...this.views, this.backV].forEach(v => { if (v?.ch === rec.ch) v.layout = -1; });
   },
 
   // ================= Bookmarks =================
@@ -263,29 +264,89 @@ Object.assign(Reader, {
       for (let k = Math.max(0, a - e.start); k < L && e.start + k < b; k++) {
         if (/\s/.test(n.data[k])) continue;
         r.setStart(n, k); r.setEnd(n, k + 1);
-        const q = r.getClientRects()[0];
+        // The widest of the range's boxes: for the first character of a wrapped line WebKit
+        // (Safari, the iPhone) also reports an empty box at the end of the line before, first
+        const q = [...r.getClientRects()].reduce((m, x) => !m || x.width > m.width ? x : m, null);
         if (q && q.width) boxes[e.start + k - a] = { l: q.left, t: q.top, r: q.right, b: q.bottom };
       }
     }
-    this.pc = { v, a, b, boxes, key: this.ch + ':' + this.page + ':' + this.layoutId };
+    // A character still without a box takes its place from the one after it on the same line
+    for (let i = boxes.length - 2; i >= 0; i--) {
+      const nx = boxes[i + 1];
+      if (boxes[i] || !nx || /\s/.test(v.idx.text[a + i])) continue;
+      const w = nx.r - nx.l;
+      boxes[i] = { l: nx.l - w, t: nx.t, r: nx.l, b: nx.b };
+    }
+    // Lines of the page, top to bottom, each with its character indexes in reading order
+    const lines = [];
+    boxes.forEach((q, i) => {
+      if (!q) return;
+      let ln = lines.find(l => Math.abs(l.t - q.t) < 3);
+      if (!ln) lines.push(ln = { t: q.t, b: q.b, idx: [] });
+      ln.b = Math.max(ln.b, q.b); ln.idx.push(i);
+    });
+    lines.sort((x, y) => x.t - y.t);
+    this.pc = { v, a, b, boxes, lines, key: this.ch + ':' + this.page + ':' + this.layoutId };
   },
   ensureCache(v) {
     if (!this.pc || this.pc.v !== v || this.pc.key !== this.ch + ':' + this.page + ':' + this.layoutId) this.cachePage(v);
   },
 
-  // Character nearest to a point (prefers the same line)
+  // Character nearest to a point: first the line (the gap between two lines is split in the
+  // middle), then the nearest character on that line. Going past the end of a short line stays
+  // on that line instead of jumping to the next one.
   hitChar(x, y) {
-    const { a, boxes } = this.pc;
+    const { a, boxes, lines } = this.pc;
+    if (!lines.length) return -1;
+    let ln = lines[lines.length - 1];
+    for (let i = 0; i < lines.length; i++) {
+      const next = lines[i + 1];
+      if (!next || y < (lines[i].b + next.t) / 2) { ln = lines[i]; break; }
+    }
     let best = -1, bestD = Infinity;
-    for (let i = 0; i < boxes.length; i++) {
+    for (const i of ln.idx) {
       const q = boxes[i];
-      if (!q) continue;
-      const dy = y < q.t ? q.t - y : y > q.b ? y - q.b : 0;
-      const dx = x < q.l ? q.l - x : x > q.r ? x - q.r : 0;
-      const d = dy * 4 + dx;
+      const d = x < q.l ? q.l - x : x > q.r ? x - q.r : 0;
       if (d < bestD) { bestD = d; best = i; if (d === 0) break; }
     }
     return best < 0 ? -1 : a + best;
+  },
+  // Which selection handle (if any) a point is close to: a drag starting next to a handle moves it
+  nearHandle(x, y) {
+    if (!this.sel || !this.el.selLayer.classList.contains('active')) return null;
+    let pick = null, bestD = 34;
+    this.el.selLayer.querySelectorAll('.sel-handle').forEach(h => {
+      const r = h.getBoundingClientRect();
+      const dx = Math.max(r.left - x, 0, x - r.right), dy = Math.max(r.top - 12 - y, 0, y - r.bottom - 12);
+      const d = Math.hypot(dx, dy);
+      if (d < bestD) { bestD = d; pick = h.dataset.h; }
+    });
+    return pick;
+  },
+  // Move one end of the selection to a point (handles, and drags that start next to them)
+  moveEnd(which, x, y) {
+    this._pt = [x, y];
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => {
+      this._raf = 0;
+      const s = this.sel, b = this.hitBoundary(...this._pt);
+      if (!s || b < 0) return;
+      if (which === 'start') s.start = Math.min(b, s.end - 1);
+      else s.end = Math.max(b, s.start + 1);
+      s.anchor = s.start;
+      this.drawSel();
+    });
+  },
+  // A handle drag has ended: an existing highlight takes the new range, the menu comes back
+  endMove() {
+    this.dragging = null;
+    this._selEnded = Date.now();
+    const s = this.sel;
+    if (s?.rec && (s.start !== s.rec.start || s.end !== s.rec.end)) {   // resize an existing highlight
+      this.updateAnnot(s.rec, { start: s.start, end: s.end, text: s.v.idx.text.slice(s.start, s.end) });
+      this.sel.v = this.views[this.top];
+    }
+    if (this.sel) this.showSelMenu();
   },
   // Caret position (between characters) nearest to a point
   hitBoundary(x, y) {
@@ -383,28 +444,11 @@ Object.assign(Reader, {
       });
       h.addEventListener('pointermove', e => {
         if (this.dragging !== h.dataset.h) return;
-        this._pt = [e.clientX, e.clientY - dy];
-        if (this._raf) return;
-        this._raf = requestAnimationFrame(() => {
-          this._raf = 0;
-          const s = this.sel, b = this.hitBoundary(...this._pt);
-          if (!s || b < 0) return;
-          if (this.dragging === 'start') s.start = Math.min(b, s.end - 1);
-          else s.end = Math.max(b, s.start + 1);
-          s.anchor = s.start;
-          this.drawSel();
-        });
+        this.moveEnd(h.dataset.h, e.clientX, e.clientY - dy);
       });
       const up = () => {
         if (this.dragging !== h.dataset.h) return;
-        this.dragging = null;
-        this._selEnded = Date.now();
-        const s = this.sel;
-        if (s?.rec && (s.start !== s.rec.start || s.end !== s.rec.end)) {   // resize an existing highlight
-          this.updateAnnot(s.rec, { start: s.start, end: s.end, text: s.v.idx.text.slice(s.start, s.end) });
-          this.sel.v = this.views[this.top];
-        }
-        if (this.sel) this.showSelMenu();
+        this.endMove();
       };
       h.addEventListener('pointerup', up);
       h.addEventListener('pointercancel', up);

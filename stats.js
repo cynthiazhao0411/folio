@@ -8,7 +8,9 @@
 // Idle detection only affects the statistics; reading itself is never interrupted.
 
 const IDLE_MS = 90 * 1000;
-const READ_SPEED = 400;          // characters per minute — a typical pace for Chinese fiction
+// Characters per minute for estimated reading times: a typical silent-reading pace for Chinese,
+// between the slow (~300) and fast (~460) adult readers measured in eye-tracking studies
+const READ_SPEED = 400;
 
 // ================= Clock =================
 const Clock = {
@@ -61,26 +63,55 @@ const Clock = {
   idle() { return !this.listening && Date.now() - this.lastActivity > IDLE_MS; },
 };
 
+// ================= Estimated reading time =================
+// Characters (punctuation included, spaces and markup not) ÷ READ_SPEED, for every chapter.
+// Kept in m.est = { speed, chapters: [ms…], total: ms } so the shelf never needs the text.
+function chapterChars(c) {
+  return (c?.html || '').replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length;
+}
+function estimateBook(chapters) {
+  const list = chapters.map(c => Math.round(chapterChars(c) / READ_SPEED * 60000));
+  return { speed: READ_SPEED, chapters: list, total: list.reduce((a, b) => a + b, 0) };
+}
+function estimateMs(m) { return m.est?.total ?? (m.words || 0) / READ_SPEED * 60000; }
+
 // ================= Read-throughs =================
-// A read-through counts when progress passes 85% AND the time spent in this
-// read-through reaches 40% of the book's estimated reading time (length ÷ reading
-// speed). Long books need proportionally more time, and jumping to the end doesn't count.
+// A read-through counts when progress reaches 98% AND the real reading time of this
+// read-through reaches 40% of the book's estimated reading time, so jumping to the end
+// doesn't count. Reading time is the reading clock's (only while the book is open and in use).
 // After it counts, going back to the first 10% starts a new read-through.
-function estimateMs(m) { return (m.words || 0) / READ_SPEED * 60000; }
+// Each finished read-through is kept in m.readThroughs: { n, start, end, ms, opens, est }.
+const FINISH_PCT = 98;
+function newRun() { return { ms: 0, counted: false, start: null }; }
+// The read-through that reading time is added to now (a new one once a finished book is back in its first 10%)
+function currentRun(m) {
+  if (!m.run || (m.run.counted && (m.progress?.pct || 0) < 10)) m.run = newRun();
+  return m.run;
+}
 
 function checkFinished(m) {
-  const run = m.run || (m.run = { ms: 0, counted: false });
-  const pct = m.progress?.pct || 0;
-  if (run.counted && pct < 10) { run.ms = 0; run.counted = false; }
+  const run = currentRun(m), pct = m.progress?.pct || 0;
   const est = estimateMs(m);
-  if (!run.counted && pct >= 85 && est > 0 && run.ms >= est * .4) {
+  if (!run.counted && pct >= FINISH_PCT && est > 0 && run.ms >= est * .4) {
     run.counted = true;
     m.reads = (m.reads || 0) + 1;
     if (m.status) m.status = 'done';                 // a hand-set status follows the real finish
-    (m.finished || (m.finished = [])).push(Date.now());
+    const now = Date.now();
+    (m.finished || (m.finished = [])).push(now);
+    (m.readThroughs || (m.readThroughs = [])).push({ n: m.reads, start: run.start, end: now, ms: Math.round(run.ms), opens: null, est: Math.round(est) });
     return true;
   }
   return false;
+}
+
+// How many times the book was opened during a read-through, from the session records:
+// openings with reading time, an opening within 2 minutes of the last one (a reload) merged in
+async function countOpens(bookId, from, to) {
+  const list = (await DB.allSessions()).filter(x => x.bookId === bookId && x.ms > 0 && (x.end || x.start) >= (from || 0) && x.start <= to)
+    .sort((a, b) => a.start - b.start);
+  let n = 0, lastEnd = -Infinity;
+  for (const x of list) { if (x.start - lastEnd > 120000) n++; lastEnd = Math.max(lastEnd, x.end); }
+  return { opens: n, first: list[0]?.start ?? null };
 }
 
 // ================= Formatting =================
@@ -269,10 +300,15 @@ const StatsPage = {
     if (this.bookId) {                                   // one book: its read-throughs instead of a ranking
       const m = this.data.metas.get(this.bookId);
       const done = (m?.finished || []).slice().reverse();
+      const detail = new Map((m?.readThroughs || []).map(r => [r.end, r]));
       const est = estimateMs(m || {});
       return `<div class="st-rank-title">读完记录</div>` + (done.length
-        ? done.map((ts, i) => `<div class="st-done"><b>第 ${done.length - i} 遍</b><span>${fmtTime(ts)}</span></div>`).join('')
-        : `<div class="st-empty">还没有读完过${est ? `<br><small>进度过 85%，并且这一轮读满约 ${fmtDur(est * .4, true)} 就算读完一遍</small>` : ''}</div>`);
+        ? done.map((ts, i) => {
+            const r = detail.get(ts);
+            const sub = r ? [r.manual ? '手动标为读完' : '', r.ms ? '用时 ' + fmtDur(r.ms, true) : '', r.opens ? `打开 ${r.opens} 次` : '', r.est ? '预计 ' + fmtDur(r.est, true) : ''].filter(Boolean).join(' · ') : '';
+            return `<div class="st-done"><b>第 ${done.length - i} 遍</b><span>${fmtTime(ts)}</span>${sub ? `<small>${sub}</small>` : ''}</div>`;
+          }).join('')
+        : `<div class="st-empty">还没有读完过${est ? `<br><small>进度到 98%，并且这一遍实际读满约 ${fmtDur(est * .4, true)} 就算读完一遍</small>` : ''}</div>`);
     }
     const list = this.ranking(from, to).slice(0, 5);
     if (!list.length) return `<div class="st-empty">这段时间还没有阅读记录</div>`;

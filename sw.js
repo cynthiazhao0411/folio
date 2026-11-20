@@ -4,7 +4,10 @@
 const CACHE = 'folio-1.2.6';
 const FILES = [
   './', 'index.html', 'style.css', 'app.js', 'desktop.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'backup.js', 'library.js', 'sync.js', 'cloud.js', 'repo.js', 'migrate.js', 'importer.js', 'formats.js', 'links.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js',
-  'fonts/NotoSerifSC-Regular.woff', 'fonts/NotoSerifSC-Medium.woff', 'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'favicon.png',
+  'fonts/NotoSerifSC-Regular.woff', 'fonts/NotoSerifSC-Medium.woff', 'fonts/sans/sans.css', 'fonts/sans/folio-quotes.woff2', 'fonts/inter-latin-wght-normal.woff2',
+  // The Chinese pieces of Folio Sans (fonts/sans/*.woff2) are cached as they are first shown, not up front:
+  // devices with PingFang never need them
+  'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'favicon.png',
 ];
 
 self.addEventListener('install', e => {

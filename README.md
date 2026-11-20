@@ -8,7 +8,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 
 ### Reading
 - **Paginated layout**: CSS multi-column pagination with tap and swipe to turn pages.
-- **Page curl**: the page follows your finger, with a paper back and a fold shadow. Every frame is a GPU-composited `transform`.
+- **Page curl**: the page bends from wherever it is taken: a corner gives a diagonal fold, the middle of the edge an upright one, and the lifted point follows the finger (on a computer, drag in the page margins; clicks and taps turn from the height they land at). The turned-over part shows the back of the paper, the same page mirrored and faint, with shading where it bends and a shadow along the fold on the page underneath. Pages turn back the same way from the left. Only transforms and clip paths change while a page turns; the text is never repainted.
 - **Front pages**: each book opens on a cover page (jacket, title, characters, tags, summary), followed by a full-bleed info page with word count, chapter count and date.
 - **Navigation**: a chapter scrubber to jump to any page of the current chapter, and 上一章 / 下一章 buttons. The footer shows the chapter, the page within it and the whole-book percentage.
 - **The End**: every book closes on its own final page in the book's colour, always after the latest chapter however often the book is updated.
@@ -18,7 +18,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Reading settings**: font size, three paper themes (cream, green, night) and page-turn style, all remembered.
 
 ### Highlights, notes and bookmarks
-- **Character-precise selection**: long-press (or click and drag on desktop) to select, with drag handles, a live character count and a floating menu at the end of the selection.
+- **Character-precise selection**: long-press (or click and drag on desktop) to select, with drag handles, a live character count and a floating menu at the end of the selection. Every character is measured (including the first one of a wrapped line, which WebKit reports with an extra empty box), the pointer is matched to a line first and then to the nearest character on it, and a drag that starts beside a handle moves that handle.
 - **Highlights and notes**: four highlight colours and notes with timestamps. Writing a note on plain text highlights it automatically. Tap any highlight to change its colour, copy it, edit it or delete it. Every saved version of a note is kept with its time.
 - **Bookmarks**: pull the page down to add or remove one, or tap the ribbon to remove it.
 - **One panel for everything**: contents, bookmarks and notes live in a single slide-up panel, and each entry jumps straight to its place.
@@ -39,7 +39,8 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 - **Reading sessions**: every time a book is opened, Folio records when, for how long, and from where to where. This is the base for history, calendar and year-in-review views.
 - **Honest timer**: the clock stops after 90 seconds without input and stops immediately when the app goes to the background.
 - **Stats**: day, week, month, year and all-time, with comparison to the previous period, reading days, streaks and most-read books.
-- **Read-throughs**: a book counts as read once progress passes 85% *and* this run's reading time reaches 40% of the estimated time (word count ÷ reading speed), so it adapts to both short and long books. The first time you mark a book finished by hand also counts once.
+- **Read-throughs**: a book counts as read once progress reaches 98% *and* the real reading time of this read-through reaches 40% of the book's estimated time, so jumping to the end never counts; going back to the first 10% starts the next read-through. Reading time is only counted while the book is open and in use (the clock stops after 90 s without a touch and when Folio is hidden). Each finished read-through keeps its start and end, its total reading time across every opening, how many times the book was opened for it (from the session records, a reopening within 2 minutes counted once) and the estimate it was measured against. Marking a book finished by hand counts once. The count shows on the shelf (读完 N 遍) and, with the read-through under way, at the top of the long-press card, which opens every finish with its details.
+- **Estimated reading time**: every chapter and the whole book get an estimate from their character count at 400 characters a minute, a typical silent-reading pace for Chinese; it is stored with the book (and filled in once for books imported earlier) and shown as 预计 on the long-press card, never as a countdown.
 - **Ratings**: every rating you give is kept, and the book's rating is their average to the nearest half star. Re-rating within five minutes counts as a correction. You're asked to rate a book when you finish it, and the library view shows your rating distribution.
 
 ### Import and export
@@ -63,7 +64,7 @@ A lightweight, mobile-first e-book reader built as a Progressive Web App. No ser
 |---|---|
 | `importer.js` | Parsing: DOMParser for HTML structure, TextDecoder with GB18030 fallback, regex-based TXT chapter detection, stable IDs from a hash of source or title and authors |
 | `formats.js` | ZIP reader on the browser's `DecompressionStream`; EPUB (OPF, spine, nav / NCX, cover; structured-export layout recognised); PDF text extraction with line and paragraph rebuilding |
-| `reader.js` | Layout and turning: one chapter at a time, `column-width` pagination, `translate3d` positioning; two-sheet double buffer for the curl; scrubber, inline author's notes, traditional → simplified display |
+| `reader.js` | Layout and turning: one chapter at a time, `column-width` pagination, `translate3d` positioning; two-sheet double buffer and a third sheet for the back of the turning page in the curl; scrubber, inline author's notes, traditional → simplified display |
 | `annotations.js` | Bookmarks, highlights and notes anchored by character offsets in each chapter's plain text (independent of layout) and re-located by quoted text after re-import; custom selection with cached glyph boxes and arithmetic hit-testing |
 | `stats.js` | Reading clock (idle and background detection), read-through rule, stats page with pure HTML/CSS charts and rating distribution |
 | `repo.js` | Private repository storage over the Git Data API: content-checksummed shards, batched uploads, one atomic commit per write (fast-forward only), reads by blob id |
@@ -87,12 +88,15 @@ Plain HTML, CSS and JavaScript: no framework, no build step.
 
 ## Fonts and licence
 
-Folio's own interface (shelf, covers, front pages, The End, dialogs, menus, panels, footers) is set in **Noto Serif CJK SC** (Source Han Serif), loaded locally from `fonts/` with `@font-face`; no network font service is used.
+The interface and the book text use the font the iPhone shows, **PingFang SC**. PingFang is Apple's and cannot be shipped with Folio, so on devices without it (Windows, Android, Linux) Folio uses bundled open fonts of the same design family, loaded locally with `@font-face` (no network font service):
+- **Folio Sans**: Noto Sans SC (Source Han Sans), variable weight, in `fonts/sans/`, split by character range (`fonts/sans/sans.css`) so only the pieces of the characters on screen are downloaded. Symbols and emoji are left to each system's own fonts.
+- **Folio Latin**: Inter (`fonts/inter-latin*-wght-normal.woff2`) for Latin letters, digits and Western punctuation, which PingFang draws with narrow Latin glyphs.
+- **Folio Quotes**: the four curly quotes from Folio Sans at proportional width (`fonts/sans/folio-quotes.woff2`), as PingFang sets them.
+- A device that has PingFang finds it first and downloads none of these.
 
-- `fonts/NotoSerifSC-Regular.woff` (400) and `fonts/NotoSerifSC-Medium.woff` (500-700, so headings never get a synthesised bold). Official Noto Serif CJK 2.002 outlines, subset to GB2312 + Latin + punctuation and converted to WOFF. Characters outside the subset fall back along `--ui-font`.
-- Licence: SIL Open Font License 1.1, copyright 2017-2023 Adobe. The full text is in `fonts/OFL.txt` and must stay with the font files.
-- The bundled serif is used in exactly three places: the title and the author inside every jacket (shelf and cover page), and the bold title on the cover page. Everything else keeps Folio's default fonts: Songti (`--font`) for book text, the titles under the shelf jackets, the cover page's subtitle and `CP · …` line, sheets, menus and dialogs; the system sans (`--default-font`) for body text and buttons. The cover page shows the pairing on its own `CP · …` line between the jacket and the bold title, never inside the jacket. The bundled serif looks the same on every device; the default fonts are the system's own (Songti SC / PingFang on Apple devices, 华文宋体 or 宋体 / 微软雅黑 on Windows).
-- The service worker precaches both files, so the font also works offline.
+The title and author inside every jacket, and the bold title on the cover page, are set in **Noto Serif CJK SC** (Source Han Serif): `fonts/NotoSerifSC-Regular.woff` (400) and `fonts/NotoSerifSC-Medium.woff` (500–700), subset to GB2312 + Latin + punctuation.
+
+All bundled fonts are under the SIL Open Font License 1.1 (`fonts/OFL.txt`, `fonts/sans/OFL.txt`, `fonts/Inter-OFL.txt`), which must stay with the files. The service worker precaches the small files; the pieces of Folio Sans are cached as they are first used, so the fonts also work offline.
 
 ## Run locally
 
