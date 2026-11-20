@@ -537,8 +537,10 @@ const Sync = {
   // The repository and token, asked together with how to make them
   askRepo({ title, intro, ok }) {
     return new Promise(resolve => {
+      // The explanation scrolls inside the sheet; the button stays visible below it (phones)
       const s = quickSheet(`
         <div class="pk-title">${esc(title)}</div>
+        <div class="sheet-scroll">
         ${intro ? `<p class="sync-note">${intro}</p>` : ''}
         <ol class="bm-steps">
           <li>在 GitHub 新建一个仓库，比如 <b>folio-data</b>，选 <b>Private</b>。</li>
@@ -548,7 +550,15 @@ const Sync = {
         <input class="alert-input" data-f="repo" placeholder="用户名/仓库名，比如 cynthiazhao0411/folio-data" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(this.st.repo || '')}">
         <input class="alert-input" data-f="token" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
         <p class="sync-note">令牌只保存在这台设备上，也会写进你复制的收书书签里，不要发给别人。</p>
-        <div class="pk-list"><button class="pk-row strong" data-a="ok"><span>${esc(ok)}</span></button></div>`);
+        </div>
+        <div class="pk-list form-foot"><button class="pk-row strong" data-a="ok"><span>${esc(ok)}</span></button></div>`, 'form');
+      // With the iPhone keyboard open, keep the sheet inside the part of the screen still visible
+      const vv = window.visualViewport;
+      const fit = () => { if (vv) Object.assign(s.root.style, { top: vv.offsetTop + 'px', height: vv.height + 'px', bottom: 'auto' }); };
+      vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit);
+      const unfit = () => { vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); };
+      new MutationObserver((_, o) => { if (!s.root.isConnected) { unfit(); o.disconnect(); } }).observe(document.body, { childList: true });
+      s.card.addEventListener('focusin', e => { if (e.target.matches('input')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300); });
       const val = f => s.card.querySelector(`[data-f=${f}]`).value.trim();
       s.card.onclick = async e => {
         if (!e.target.closest('[data-a=ok]')) return;

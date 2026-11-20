@@ -25,9 +25,14 @@ const Migrate = {
     const wait = quickSheet(`<div class="pk-title">正在升级…<small>请保持 Folio 打开；旧 Gist 不会被改动</small></div><p class="sync-note mg-step">准备中</p><div class="bk-spin"></div>`);
     const step = t => { const el = wait.card.querySelector('.mg-step'); if (el) el.textContent = t; };
     try {
+      this.choose = null;
       const report = await this.run(got, step);
       await wait.close();
-      await dialog({ title: '升级完成，检查通过 ✓', message: report, ok: '好' });
+      await dialog({ title: report.startsWith('已连接到') ? '已连接私有仓库' : '升级完成，检查通过 ✓', message: report, ok: '好' });
+      if (this.choose) {                              // joined with unsynced changes: pick the side to keep
+        const msg = await Sync.connect(this.choose.token, this.choose.repo);
+        if (msg) toast(msg);
+      }
     } catch (e) {
       console.error(e);
       await wait.close();
@@ -71,6 +76,11 @@ const Migrate = {
     const existing = await Repo.manifest('sync');
     if (record && record.from?.index !== old.index) throw new Error(`「${repo}」里已经有另一个 Folio 书架。请换一个新的空仓库。`);
     if (!record && existing) throw new Error(`「${repo}」里已经有 Folio 书架（不是从这些 Gist 搬过来的）。请换一个新的空仓库，或者先断开这台设备的同步，再连接这个仓库。`);
+    // Another device already moved these gists: join its repository, never move the data again.
+    // Only the device that wrote the record may write it again (its own retry after a failed check).
+    Sync.st.moveId ||= Math.random().toString(36).slice(2) + Date.now().toString(36);
+    Sync.save();
+    if (record && existing && record.by !== Sync.st.moveId) return this.join(record, { token, repo }, old);
     if (record && existing && existing.updatedAt !== record.updatedAt) return this.join(record, { token, repo }, old);
 
     // 3. Read everything from the gists
@@ -130,7 +140,7 @@ const Migrate = {
     const enc = new TextEncoder();
     for (const [name, text] of inbox) put.set('inbox/' + name, { s: await Repo.gitSha(enc.encode(text)), text });
     const moved = [...new Set([...(record?.inbox || []), ...[...inbox.keys()].filter(k => k !== 'library.json')])];
-    const rtext = JSON.stringify({ app: 'folio-migration', at: Date.now(), updatedAt: idx.updatedAt, from: old.index ? { index: old.index } : {}, inbox: moved }, null, 1);
+    const rtext = JSON.stringify({ app: 'folio-migration', at: Date.now(), updatedAt: idx.updatedAt, by: Sync.st.moveId, device: Sync.st.device, from: old.index ? { index: old.index } : {}, inbox: moved }, null, 1);
     put.set('migration.json', { s: await Repo.gitSha(enc.encode(rtext)), text: rtext });
     await Repo.commit('Move Folio data from gists', { put, clear: backup ? ['sync', 'backup'] : ['sync'] });
 
@@ -183,11 +193,21 @@ const Migrate = {
 
   // The library was already moved (from the other device) and the repository has moved on since:
   // join it; the usual last-changed-wins decision takes it from there
+  // Nothing is written to the repository here: this device takes the library that is there.
+  // If it has changes it never synced, it first asks which side to keep.
   async join(record, { token, repo }, old) {
+    const dirty = Sync.st.dirty;
     await this.switchTo({ token, repo }, old, record.inbox || [], null);
+    CloudBackup.st.dirty = false;                     // nothing new to back up until something changes here
     CloudBackup.save();
+    if (dirty) {
+      Sync.st.joined = false;                         // no upload until the choice is made
+      Sync.save();
+      this.choose = { token, repo };
+      return `已连接到 ${repo}（${record.device ? '由' + record.device + '搬过去' : '另一台设备已经搬过去'}）。\n\n这台设备有还没同步的改动，接下来请选择保留哪一边的书架。\n\n旧 Gist 原样保留。请重新复制一次收书书签。`;
+    }
     setTimeout(() => Sync.check(), 500);
-    return `另一台设备已经把书架搬到 ${repo}，这台设备已连接上去，会同步最新的书架。\n\n旧 Gist 原样保留。请重新复制一次收书书签。`;
+    return `已连接到 ${repo}（${record.device ? '由' + record.device + '搬过去' : '另一台设备已经搬过去'}），会下载仓库里的书架，只下载这台设备没有或不一样的书。\n\n仓库里已有的数据不会被改写。旧 Gist 原样保留。请重新复制一次收书书签。`;
   },
 
   async switchTo({ token, repo }, old, copied, manifest) {

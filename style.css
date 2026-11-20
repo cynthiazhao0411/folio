@@ -211,6 +211,13 @@ body.theme-night .curl-shadow { background: linear-gradient(to right, rgba(0,0,0
 }
 .sheet-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; min-height: 0; flex: 1; }
 .sheet-card.tall { height: 86%; max-height: none; padding-left: 0; padding-right: 0; }
+/* A sheet with a form: the text scrolls, the button below it never leaves the screen */
+.sheet-card.form .form-foot { flex: none; padding-top: .6em; }
+.sheet-card.form .sheet-scroll { margin: 0 -.2em; padding: .4em .2em 0; }   /* room for the first note's negative margin */
+@media (max-width: 600px) {
+  .sheet-modal.fixed .sheet-card.form { max-height: calc(100% - env(safe-area-inset-top) - 16px); }
+  .sheet-card.form .alert-input + .sync-note { margin-top: .6em; }
+}
 
 /* TOC sheet */
 .sheet-head { display: grid; grid-template-columns: 52px 1fr 52px; align-items: center; padding: 0 1em .4em; }
