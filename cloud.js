@@ -1,7 +1,12 @@
-// cloud.js — Automatic backup to a secret GitHub gist ("Folio backup").
+// cloud.js — Automatic backup to GitHub.
 //
-// Uses the same token as device sync and the same data as the manual ZIP backup
-// (Backup.parts), stored in two secret gists:
+// From v1.2.6 the backup is the backup/ folder of the private sync repository (repo.js has the
+// layout). Every backup is one commit, so earlier backups stay in the repository history and
+// 从云端备份恢复 can go back to any of the recent ones. Book text the repository already holds
+// (from sync/ or an earlier backup) is referenced, not uploaded again.
+//
+// Before v1.2.6 (devices not moved yet) it uses the same token as device sync and the same data
+// as the manual ZIP backup (Backup.parts), stored in two secret gists:
 //   "Folio backup"          folio-backup.json            the manifest: counts, checksums, file names
 //                           s-<store>-<checksum>.json    one database store
 //                           local-<checksum>.json        this device's settings
@@ -29,7 +34,8 @@ const CloudBackup = {
 
   load() { try { this.st = JSON.parse(localStorage.getItem('folio-cloud')) || {}; } catch { this.st = {}; } if (this.st.enabled === undefined) this.st.enabled = true; },
   save() { localStorage.setItem('folio-cloud', JSON.stringify(this.st)); },
-  get on() { return Sync.on && this.st.enabled !== false; },
+  // A device still on the gists stops writing to them once another device moved the library
+  get on() { return Sync.on && this.st.enabled !== false && !(Sync.st.moved && !Sync.repoMode); },
 
   init() {
     this.load();
@@ -77,6 +83,7 @@ const CloudBackup = {
     clearTimeout(this.timer);
     const startedDirty = this.st.rev || 0;
     try {
+      if (Sync.repoMode) return await this.runRepo(startedDirty);
       const g = await this.gists();
 
       // Book text only changes when a book is imported or updated: reuse what was uploaded
@@ -148,6 +155,58 @@ const CloudBackup = {
       this.busy = false;
     }
   },
+  // A backup into backup/ of the repository, in one commit
+  async runRepo(startedDirty) {
+    const cache = this.st.repoBooks || {};               // book id → { sig, entry } of the last backup
+    const sig = m => m ? [m.chapterCount, m.words, (m.versions || []).length].join('|') : '';
+    const metaOf = new Map((await DB.allMeta()).map(m => [m.id, m]));
+    const synced = Sync.remote?.books || {}, hashes = Sync.st.hashes || {}, pending = new Set(Sync.st.pending || []);
+    const src = await Repo.dbSource(id => {
+      const c = cache[id];
+      if (c && c.sig === sig(metaOf.get(id))) return c.entry;
+      const e = synced[id];                            // the same text is already in sync/
+      return e && hashes[id] === e.h && !pending.has(id) ? e : null;
+    });
+    const snap = await Repo.build(src);
+    const local = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!Backup.DEVICE_ONLY.test(k)) local[k] = localStorage.getItem(k);
+    }
+    const ltext = JSON.stringify(local), lh = Backup.hash(ltext);
+    const lent = { f: 'local.json', h: lh, s: await Repo.gitSha(new TextEncoder().encode(ltext)) };
+    snap.files.set('local.json', { ...lent, text: ltext });
+    const summary = Backup.summarize(src.stores, []);
+    summary.chapters = Object.values(snap.manifest.books).reduce((n, b) => n + (b.chapters || 0), 0);
+    Object.assign(snap.manifest, { kind: 'backup', device: Sync.st.device, local: [lent], summary,
+      appVersion: document.querySelector('.app-version')?.textContent.replace(/^\D+/, '') || '' });
+    try {
+      await Repo.save('backup', snap, `backup: ${summary.books} books · ${Sync.st.device}`);
+    } catch (e) {
+      if (e.missing) this.st.repoBooks = {};             // the next backup uploads the book text again
+      throw e;
+    }
+    this.st.repoBooks = Object.fromEntries(Object.entries(snap.manifest.books).map(([id, b]) => [id, { sig: sig(metaOf.get(id)), entry: b }]));
+    Object.assign(this.st, { at: Date.now(), error: null, summary });
+    if ((this.st.rev || 0) === startedDirty) this.st.dirty = false;
+    this.save();
+    if (this.st.dirty) this.schedule(this.DELAY);
+    return true;
+  },
+
+  // Recent backups in the repository history, newest first
+  async history() {
+    const list = await Repo.api(`/commits?path=backup/manifest.json&sha=${encodeURIComponent(Repo.branch)}&per_page=20`);
+    return list.map(c => ({ sha: c.sha, at: Date.parse(c.commit.committer?.date || c.commit.author?.date), message: c.commit.message }));
+  },
+  async readRepo(ref) {
+    const manifest = await Repo.manifest('backup', ref);
+    if (!manifest || manifest.kind !== 'backup') throw new Error('云端还没有备份');
+    const data = await Repo.read(manifest, { local: await Repo.localTexts() });
+    const ltext = (await Promise.all(manifest.local.map(e => Repo.text(e)))).join('');
+    return { manifest, stores: data.stores, books: data.books, local: JSON.parse(ltext) };
+  },
+
   fail(msg) {
     this.st.error = msg;
     this.save();
@@ -155,7 +214,8 @@ const CloudBackup = {
   },
 
   // The latest cloud backup, in the same shape as Backup.read(), ready for Backup.apply()
-  async read() {
+  async read(ref) {
+    if (Sync.repoMode) return this.readRepo(ref);
     const g = await this.gists();
     const main = await Sync.api('/gists/' + g.main);
     const mtext = await Sync.fileText(main.files['folio-backup.json']);
@@ -163,9 +223,8 @@ const CloudBackup = {
     const manifest = JSON.parse(mtext);
     const books = await Sync.api('/gists/' + g.books);
     const part = async (gist, name, want) => {
-      const f = gist.files[name];
-      if (!f) throw new Error('云端备份缺少 ' + name);
-      const text = await Sync.fileText(f);
+      const text = await Migrate.gistText(gist, name);   // also past the 300 files a gist lists
+      if (text == null) throw new Error('云端备份缺少 ' + name);
       if (want && Backup.hash(text) !== want) throw new Error(name + ' 校验不一致');
       return Backup.unpack(JSON.parse(text));
     };
@@ -181,7 +240,7 @@ const CloudBackup = {
 
   async openPanel() {
     const s = quickSheet(`
-      <div class="pk-title">云端自动备份<small>存在你自己 GitHub 账号下的秘密 Gist 里</small></div>
+      <div class="pk-title">云端自动备份<small>${Sync.repoMode ? '存在你的私有仓库 ' + esc(Sync.st.repo) + ' 里' : '存在你自己 GitHub 账号下的秘密 Gist 里'}</small></div>
       <p class="sync-note">${esc(this.summary())}${this.st.summary ? '<br>' + esc(Backup.describe(this.st.summary)).replace(/\n/g, '<br>') : ''}</p>
       <div class="pk-list">
         <button class="pk-row" data-a="now"><span>立即备份</span></button>
@@ -197,9 +256,22 @@ const CloudBackup = {
         toast('正在备份…');
         toast(await this.run() ? '云端备份完成' : '没有备份成功：' + this.st.error);
       } else if (a === 'restore') {
+        let ref;
+        if (Sync.repoMode) {                          // pick one of the recent backups
+          let list;
+          try { list = await this.history(); } catch (err) { return dialog({ title: '无法读取云端备份', message: err.message, ok: '好' }); }
+          if (!list.length) return dialog({ title: '云端还没有备份', message: '', ok: '好' });
+          ref = await new Promise(resolve => {
+            const p = quickSheet(`<div class="pk-title">选一个备份<small>最新的在最上面</small></div>
+              <div class="pk-list">${list.map((c, i) => `<button class="pk-row" data-i="${i}"><span>${esc(fmtTime(c.at))}${i ? '' : ' · 最新'}</span><small>${esc(c.message.replace(/^backup: /, '').replace(' books', ' 本'))}</small></button>`).join('')}</div>`);
+            p.card.onclick = async ev => { const r = ev.target.closest('[data-i]'); if (!r) return; await p.close(); resolve(list[+r.dataset.i].sha); };
+            p.root.addEventListener('click', ev => { if (ev.target === p.root) resolve(null); });
+          });
+          if (!ref) return;
+        }
         toast('正在读取云端备份…');
         let data;
-        try { data = await this.read(); } catch (err) { return dialog({ title: '无法读取云端备份', message: err.message, ok: '好' }); }
+        try { data = await this.read(ref); } catch (err) { return dialog({ title: '无法读取云端备份', message: err.message, ok: '好' }); }
         restoreFlow(data);
       } else if (a === 'toggle') {
         this.st.enabled = this.st.enabled === false;
@@ -212,6 +284,7 @@ const CloudBackup = {
 
   summary() {
     if (!Sync.on) return '连接设备同步后可用';
+    if (Sync.st.moved && !Sync.repoMode) return '已暂停：先在「设备同步」里升级到私有仓库';
     if (this.st.enabled === false) return '已关闭';
     if (this.busy) return '正在备份…';
     if (this.st.error) return `没有备份成功：${this.st.error}${this.st.at ? ' · 上次成功 ' + fmtTime(this.st.at) : ''}`;

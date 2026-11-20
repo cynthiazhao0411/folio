@@ -9,7 +9,8 @@
 //     the ones with new chapters
 //   • on any other site: finds the e-book files the page offers for download (EPUB, TXT,
 //     HTML, PDF, ZIP — e.g. a public-domain library's book page) and sends the ones you pick
-// Works travel through your own secret inbox gist; Folio collects them when it opens.
+// Works travel through the inbox/ folder of your own private repository (before v1.2.6: a
+// secret inbox gist); Folio collects them when it opens.
 // If the site does not let the page talk to GitHub, the works are copied to the
 // clipboard instead, to paste into Folio.
 //
@@ -18,8 +19,19 @@
 // (iOS does this to background tabs), tapping the bookmark again offers to continue with
 // only the works that are left. The screen is kept awake while a batch runs.
 (async () => {
-  const CFG = { token: '__TOKEN__', inbox: '__INBOX__' };
-  const API = 'https://api.github.com/gists/' + CFG.inbox;
+  const CFG = { token: '__TOKEN__', inbox: '__INBOX__', repo: '__REPO__', branch: '__BRANCH__' };
+  const API = CFG.repo ? 'https://api.github.com/repos/' + CFG.repo : 'https://api.github.com/gists/' + CFG.inbox;
+  // The browser's own fetch, taken from a fresh frame, so a site script that replaced window.fetch
+  // does not get to see the token (this narrows the risk; it cannot rule out a hostile page)
+  const send = (() => {
+    try {
+      const f = document.createElement('iframe');
+      f.style.display = 'none';
+      document.documentElement.appendChild(f);
+      const native = f.contentWindow.fetch.bind(f.contentWindow);
+      return (url, opts) => native(url, opts);
+    } catch { return (url, opts) => fetch(url, opts); }
+  })();
   const WAIT = 2500;                                  // pause between page loads, to be polite to the site
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const workId = href => ((href || '').match(/\/works\/(\d+)/) || [])[1];
@@ -133,26 +145,58 @@
 
   let blocked = false;
   const held = [];                                   // works kept for the clipboard when GitHub is unreachable
-  async function api(method, body) {
-    const r = await fetch(API, {
-      method, body: body && JSON.stringify(body),
-      headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' },
+  async function api(method, body, path = '', accept = 'application/vnd.github+json') {
+    const r = await send(API + path, {
+      method, body: body && JSON.stringify(body), cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + CFG.token, Accept: accept },
     });
     if (r.status === 401) throw new Error('令牌失效了，请在 Folio 里重新生成书签');
-    if (!r.ok) throw new Error('收件箱出错 ' + r.status);
-    return r.json();
+    if (!r.ok) { const e = new Error('收件箱出错 ' + r.status); e.status = r.status; throw e; }
+    return accept.includes('raw') ? r.text() : r.json();
+  }
+  const utf8b64 = text => { const b = new TextEncoder().encode(text); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
+  // Repository inbox: a work's page is one file (one request); an e-book file goes in as itself,
+  // with what its page said about it beside it, both in one commit
+  async function putRepo(w) {
+    if (!w.b64) {
+      const path = `/contents/inbox/in-${w.id}.html`, body = { message: 'inbox: ' + w.id, content: utf8b64(w.html), branch: CFG.branch };
+      for (let i = 0; i < 3; i++) {
+        try { return await api('PUT', body, path); } catch (e) {
+          if (e.status === 422) {                      // sent before and not collected yet: replace it
+            try { body.sha = (await api('GET', null, path + '?ref=' + CFG.branch)).sha; } catch { /* gone meanwhile */ }
+          } else if (e.status !== 409) throw e;          // 409: the repository moved on during the write
+          await sleep(800);
+        }
+      }
+      throw new Error('收件箱一直在被改动，稍后再试');
+    }
+    const name = `inbox/in-${w.id}.${w.ext}`;
+    const file = await api('POST', { content: w.b64, encoding: 'base64' }, '/git/blobs');
+    const info = await api('POST', { content: JSON.stringify({ name: w.name, meta: w.meta || null }), encoding: 'utf-8' }, '/git/blobs');
+    for (let i = 0; i < 4; i++) {
+      const ref = await api('GET', null, '/git/ref/heads/' + CFG.branch);
+      const base = await api('GET', null, '/git/commits/' + ref.object.sha);
+      const tree = await api('POST', { base_tree: base.tree.sha, tree: [
+        { path: name, mode: '100644', type: 'blob', sha: file.sha },
+        { path: name + '.meta.json', mode: '100644', type: 'blob', sha: info.sha }] }, '/git/trees');
+      const c = await api('POST', { message: 'inbox: ' + w.id, tree: tree.sha, parents: [ref.object.sha] }, '/git/commits');
+      try { return await api('PATCH', { sha: c.sha, force: false }, '/git/refs/heads/' + CFG.branch); }
+      catch (e) { if (e.status !== 422 && e.status !== 409) throw e; await sleep(800); }
+    }
+    throw new Error('收件箱一直在被改动，稍后再试');
   }
   // Returns true when the work reached the inbox, false when it is held for the clipboard
   async function deliver(w) {
     if (!blocked) {
       try {
+        if (CFG.repo) { await putRepo(w); return true; }
         const file = w.b64 ? `in-${w.id}.${w.ext}.b64` : `in-${w.id}.html`;              // one file per work: never twice
         // A file: one line of JSON (file name and what the page says about the book), then the file
         const head = JSON.stringify({ name: w.name, meta: w.meta || null });
         await api('PATCH', { files: { [file]: { content: w.b64 ? head + '\n' + w.b64 : w.html } } });
         return true;
       } catch (e) {
-        if (!(e instanceof TypeError)) throw e;      // TypeError = the request never left the page
+        if (!(e?.name === 'TypeError')) throw e;      // TypeError = the request never left the page
         blocked = true;
       }
     }
@@ -163,12 +207,18 @@
   async function readShelf() {
     if (shelf) return shelf;
     try {
-      const g = await api('GET');
-      const f = g.files['library.json'];
-      const txt = !f ? '[]' : f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+      let txt;
+      if (CFG.repo) {
+        try { txt = await api('GET', null, `/contents/inbox/library.json?ref=${CFG.branch}`, 'application/vnd.github.raw+json'); }
+        catch (e) { if (e.status === 404) txt = '[]'; else throw e; }
+      } else {
+        const g = await api('GET');
+        const f = g.files['library.json'];
+        txt = !f ? '[]' : f.truncated ? await (await send(f.raw_url)).text() : f.content;
+      }
       shelf = JSON.parse(txt);
     } catch (e) {
-      if (e instanceof TypeError) blocked = true; else throw e;
+      if (e?.name === 'TypeError') blocked = true; else throw e;
       shelf = [];
     }
     return shelf;
@@ -401,7 +451,7 @@
         const name = (title || 'book').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60) + '.' + f.ext;
         if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, meta, b64: btoa(bin) })) sent++;
       } catch (e) {
-        errors.push(e instanceof TypeError ? '这个网站不允许页面下载这个文件（下载地址在别的网站上），请手动下载后导入' : e.message);
+        errors.push(e?.name === 'TypeError' ? '这个网站不允许页面下载这个文件（下载地址在别的网站上），请手动下载后导入' : e.message);
       }
     }
     keepAwake(false);
