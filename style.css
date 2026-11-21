@@ -904,19 +904,19 @@ body.theme-night .bc-delete { color: #e0806b; }
   .continue .ct-t { margin: 0; font-size: .84em; }
   .continue .ct-s { font-size: .68em; margin-top: .1em; }
   .continue .ct-go { padding: .42em .9em; font-size: .76em; }
-  #shelf .grid { grid-template-columns: repeat(3, var(--cw, 1fr)); justify-content: space-between; column-gap: 0; row-gap: var(--rg, 14px); }
-  #shelf .grid .card:nth-child(n+7):nth-child(-n+9) { margin-bottom: var(--tail, 0px); }
-  #shelf .grid .cover { aspect-ratio: var(--ar, 2 / 3); font-size: var(--cf, 8.5px); padding: 1.1em .9em .9em 1.3em; border-radius: 2px 7px 7px 2px; }
-  #shelf .grid .cover .c-title { -webkit-line-clamp: 4; font-size: 1.3em; }
+  #shelf .grid.mode-shelf { grid-template-columns: repeat(3, var(--cw, 1fr)); justify-content: space-between; column-gap: 0; row-gap: var(--rg, 14px); }
+  #shelf .grid.mode-shelf .card:nth-child(n+7):nth-child(-n+9) { margin-bottom: var(--tail, 0px); }
+  #shelf .grid.mode-shelf .cover { aspect-ratio: var(--ar, 2 / 3); font-size: var(--cf, 8.5px); padding: 1.1em .9em .9em 1.3em; border-radius: 2px 7px 7px 2px; }
+  #shelf .grid.mode-shelf .cover .c-title { -webkit-line-clamp: 4; font-size: 1.3em; }
   /* The title takes one or two lines and the stars and bar follow it directly; the room a
      second line would need stays below the bar (min-height), so every row keeps the same
      height and that room adds to the space before the next row instead of sitting inside the book */
-  #shelf .grid .card-info { margin-top: 6px; min-height: calc(11.5px * 1.3 * 2 + 3px + 10px * 1.3 + 4px + 2px); }
-  #shelf .grid .card-info .t { font-size: 11.5px; line-height: 1.3; white-space: normal;
+  #shelf .grid.mode-shelf .card-info { margin-top: 6px; min-height: calc(11.5px * 1.3 * 2 + 3px + 10px * 1.3 + 4px + 2px); }
+  #shelf .grid.mode-shelf .card-info .t { font-size: 11.5px; line-height: 1.3; white-space: normal;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  #shelf .grid .card-info .s { font-size: 10px; line-height: 1.3; margin-top: 3px; }
-  #shelf .grid .card-info .progress { margin-top: 4px; }
-  #shelf .grid .new-badge { left: 7px; top: 6px; font-size: 9px; padding: 2px 6px; }
+  #shelf .grid.mode-shelf .card-info .s { font-size: 10px; line-height: 1.3; margin-top: 3px; }
+  #shelf .grid.mode-shelf .card-info .progress { margin-top: 4px; }
+  #shelf .grid.mode-shelf .new-badge { left: 7px; top: 6px; font-size: 9px; padding: 2px 6px; }
 }
 
 /* Paper colour switch on the shelf: a small pill in the bottom corner */
@@ -976,3 +976,92 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 .drop-card { padding: 1.6em 2.6em; border: 2px dashed var(--accent); border-radius: 22px; background: var(--card);
   font-family: var(--font); font-size: 1.2em; letter-spacing: .2em; color: var(--accent); text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.12); }
 .drop-card small { display: block; font-family: var(--default-font); margin-top: .6em; font-size: .62em; letter-spacing: .05em; color: var(--muted); }
+
+/* ========== Shelf display modes: 书架模式 (default, above) · 列表模式 · 封面墙 ========== */
+.sub-acts { display: flex; align-items: center; gap: .9em; flex: none; }
+.mode-btn { display: flex; align-items: center; gap: .3em; border: 1px solid var(--line); background: none; color: var(--fg);
+  font: inherit; font-size: .74em; letter-spacing: .06em; padding: .38em .75em .38em .6em; border-radius: 2em; cursor: pointer; }
+.mode-btn svg { width: 15px; height: 15px; color: var(--muted); }
+.mode-btn:active { opacity: .6; }
+.mode-btn.hidden { display: none; }
+.mode-menu { position: fixed; z-index: 60; min-width: 9.5em; padding: 6px; border-radius: 14px; background: var(--card); border: 1px solid var(--line);
+  box-shadow: 0 14px 36px -10px rgba(0,0,0,.28); display: flex; flex-direction: column; }
+.mode-menu button { display: flex; align-items: center; gap: .65em; border: none; background: none; color: var(--fg); font: inherit; font-size: .86em;
+  letter-spacing: .06em; padding: .7em .8em; border-radius: 9px; text-align: left; cursor: pointer; }
+.mode-menu button svg { width: 18px; height: 18px; color: var(--muted); }
+.mode-menu button.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.mode-menu button.on svg { color: var(--accent); }
+@media (hover: hover) { .mode-menu button:not(.on):hover { background: color-mix(in srgb, var(--fg) 5%, transparent); } }
+.grid .x { display: none; }
+
+/* ---- 列表模式: one row per book, a small jacket and the details beside it ---- */
+#shelf .grid.mode-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 0 3em; }
+.grid.mode-list .card { display: grid; grid-template-columns: 58px 1fr; gap: 16px; align-items: start; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.grid.mode-list .cover { font-size: 5.4px; padding: 1.2em .9em .9em 1.4em; border-radius: 2px 5px 5px 2px; box-shadow: 0 5px 12px -5px rgba(0,0,0,.35), inset 5px 0 6px -4px rgba(0,0,0,.3); }
+.grid.mode-list .cover::before { left: 5px; }
+.grid.mode-list .cover .c-author { display: none; }
+.grid.mode-list .pin-badge { top: 3px; right: 3px; width: 17px; height: 17px; }
+.grid.mode-list .pin-badge svg { width: 10px; height: 10px; }
+.grid.mode-list .new-badge { left: 50%; top: auto; bottom: -7px; transform: translateX(-50%); font-size: 9px; padding: 1px 5px; white-space: nowrap; }
+.grid.mode-list .card-info { margin: 0; min-width: 0; display: flex; flex-direction: column; min-height: 87px; }
+.grid.mode-list .card-info .t { order: 1; font-size: 15px; line-height: 1.4; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.grid.mode-list .x { order: 2; display: contents; }
+.grid.mode-list .x-no { display: none; }
+.grid.mode-list .x-au { order: 2; font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid.mode-list .card-info .s { order: 3; font-size: 12px; margin-top: 7px; }
+.grid.mode-list .x-meta { order: 4; font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid.mode-list .x-meta i, .grid.mode-wall .x-meta i { font-style: normal; margin: 0 .45em; opacity: .6; }
+.grid.mode-list .x-tags { order: 5; display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.grid .x-tags span { font-size: 10px; letter-spacing: .08em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.grid.mode-list .card-info .progress { order: 6; margin-top: auto; position: relative; top: 8px; max-width: 220px; }
+.grid.mode-list .pick { transform: scale(.75); transform-origin: top left; }
+
+/* ---- 封面墙: covers mounted like plates in a private catalogue ---- */
+#shelf .grid.mode-wall { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 56px 40px; min-width: 0; grid-auto-flow: row dense; padding: 8px 0 24px; }
+.grid.mode-wall .card-cover { padding: 14px; background: color-mix(in srgb, var(--card) 72%, var(--bg)); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 18px 30px -24px rgba(0,0,0,.35); }
+.grid.mode-wall .cover { font-size: 13.5px; border-radius: 1px 4px 4px 1px; box-shadow: 0 14px 24px -12px rgba(0,0,0,.45), inset 7px 0 8px -5px rgba(0,0,0,.3); }
+.grid.mode-wall .pin-badge { top: 20px; right: 20px; }
+.grid.mode-wall .new-badge { top: 20px; left: 20px; }
+.grid.mode-wall .card { min-width: 0; }
+.grid.mode-wall .card-info { margin-top: 14px; min-width: 0; text-align: center; display: flex; flex-direction: column; align-items: center; }
+.grid.mode-wall .x { display: contents; }
+.grid.mode-wall .x-no { order: 0; font-family: var(--folio-serif); font-size: 10px; letter-spacing: .22em; color: var(--accent); }
+.grid.mode-wall .card-info .t { order: 1; font-family: var(--folio-serif); font-size: 14.5px; line-height: 1.45; letter-spacing: .05em; margin-top: 5px; max-width: 100%;
+  white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.grid.mode-wall .x-au { order: 2; font-size: 10.5px; letter-spacing: .18em; color: var(--muted); margin-top: 4px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid.mode-wall .card-info .s { order: 3; font-size: 10.5px; margin-top: 6px; letter-spacing: .04em; }
+.grid.mode-wall .x-meta, .grid.mode-wall .x-tags { display: none; }
+.grid.mode-wall .card-info .progress { order: 4; width: 36px; height: 1px; margin-top: 9px; }
+/* The plate: one book a group shown large, the caption set beside it */
+.grid.mode-wall .card.plate { grid-column: span 2; align-self: start; display: grid; grid-template-columns: minmax(0, 46%) 1fr; gap: 0 32px; align-items: center; }
+.grid.mode-wall .plate .cover { font-size: 15.5px; }
+.grid.mode-wall .plate .card-info { margin: 0; text-align: left; align-items: flex-start; }
+.grid.mode-wall .plate .x-no { font-size: 11px; }
+.grid.mode-wall .plate .card-info .t { font-size: 22px; line-height: 1.4; margin-top: 10px; -webkit-line-clamp: 3; }
+.grid.mode-wall .plate .x-au { font-size: 11.5px; margin-top: 8px; }
+.grid.mode-wall .plate .card-info .s { font-size: 12px; margin-top: 14px; }
+.grid.mode-wall .plate .x-meta { display: block; order: 5; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.grid.mode-wall .plate .x-tags { display: flex; order: 6; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
+.grid.mode-wall .plate .card-info .progress { order: 4; width: 56px; margin-top: 14px; }
+@media (max-width: 600px) {
+  #shelf .grid.mode-list { gap: 0; }
+  .grid.mode-list .card { grid-template-columns: 52px 1fr; gap: 14px; padding: 14px 0; }
+  .grid.mode-list .cover { font-size: 4.9px; }
+  .grid.mode-list .card-info { min-height: 78px; }
+  .grid.mode-list .card-info .t { font-size: 14.5px; }
+  #shelf .grid.mode-wall { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 38px 18px; padding: 6px 0 52px; }
+  .grid.mode-wall .card-cover { padding: 10px; }
+  .grid.mode-wall .cover { font-size: 11.5px; }
+  .grid.mode-wall .pin-badge { top: 15px; right: 15px; }
+  .grid.mode-wall .new-badge { top: 15px; left: 15px; font-size: 9px; padding: 2px 6px; }
+  .grid.mode-wall .card.lo { transform: translateY(34px); }
+  .grid.mode-wall .card-info .t { font-size: 13.5px; }
+  .grid.mode-wall .card.plate { gap: 0 18px; grid-template-columns: minmax(0, 52%) 1fr; margin-bottom: 4px; }
+  .grid.mode-wall .plate .cover { font-size: 13px; }
+  .grid.mode-wall .plate .card-info .t { font-size: 18px; margin-top: 8px; }
+  .grid.mode-wall .plate .card-info .s { margin-top: 10px; }
+  .grid.mode-wall .plate .x-tags { margin-top: 10px; }
+  .grid.mode-wall .plate .card-info .progress { margin-top: 10px; }
+  .mode-btn span { letter-spacing: .02em; }
+}

@@ -116,7 +116,7 @@ function fitShelf() {
   const grid = document.getElementById('grid');
   if (!grid) return;
   const props = ['--cw', '--ar', '--rg', '--cf', '--tail'];
-  if (innerWidth > 600 || !grid.querySelector('.card')) { props.forEach(p => grid.style.removeProperty(p)); return; }
+  if (innerWidth > 600 || shelfMode() !== 'shelf' || !grid.querySelector('.card')) { props.forEach(p => grid.style.removeProperty(p)); return; }
   props.forEach(p => grid.style.removeProperty(p));
   const shelf = document.getElementById('shelf');
   const top = grid.getBoundingClientRect().top + shelf.scrollTop + scrollY;
@@ -152,6 +152,39 @@ function statusOf(b) {
   return (b.progress?.pct || 0) > 0 ? 'reading' : 'unread';
 }
 const STATUS_NAMES = { unread: '未读', reading: '在读', done: '读完' };
+
+// Shelf display modes. The choice is a view preference of this device (localStorage, kept in
+// backups with the other local settings, not synced), and never touches the books' data.
+//   shelf: the default three-column bookshelf · list: rows with title, author and details ·
+//   wall:  covers as plates in a private catalogue, with a numbered caption under each
+const SHELF_MODES = [
+  { key: 'shelf', name: '书架模式', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4" width="4" height="7" rx="1"/><rect x="10" y="4" width="4" height="7" rx="1"/><rect x="16" y="4" width="4" height="7" rx="1"/><rect x="4" y="14" width="4" height="7" rx="1"/><rect x="10" y="14" width="4" height="7" rx="1"/><rect x="16" y="14" width="4" height="7" rx="1"/></svg>' },
+  { key: 'list', name: '列表模式', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4.5" width="4" height="6" rx="1"/><rect x="4" y="13.5" width="4" height="6" rx="1"/><path d="M11 6h9M11 9h6M11 15h9M11 18h6"/></svg>' },
+  { key: 'wall', name: '封面墙', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="3.5" width="9" height="12" rx="1"/><rect x="15" y="3.5" width="5.5" height="7.5" rx="1"/><rect x="15" y="13" width="5.5" height="7.5" rx="1"/><path d="M3.5 19h9M3.5 21h6"/></svg>' },
+];
+const MODE_KEY = 'folio-shelf-mode';
+function shelfMode() {
+  let m; try { m = localStorage.getItem(MODE_KEY); } catch {}
+  return SHELF_MODES.some(x => x.key === m) ? m : 'shelf';
+}
+
+// Cover wall rhythm: a large plate opens every group of nine; on the phone the right-hand
+// column of each group is set a little lower, like plates on facing pages
+function wallClass(i) {
+  const k = i % 9;
+  return k === 0 ? ' plate' : (k % 2 === 0 ? ' lo' : '');
+}
+// The extra lines list and wall modes show (the shelf mode keeps its card as it was)
+function cardExtra(b, i, st, pct) {
+  const tags = systemTags(b), au = (b.authors || []).join('、');
+  const w = b.words ? (b.words >= 10000 ? (b.words / 10000).toFixed(1).replace(/\.0$/, '') + ' 万字' : b.words + ' 字') : '';
+  return `<div class="x">
+      <div class="x-no">No. ${String(i + 1).padStart(2, '0')}</div>
+      ${au ? `<div class="x-au">${esc(au)}</div>` : ''}
+      <div class="x-meta">${[w, b.chapterCount ? b.chapterCount + ' 章' : ''].filter(Boolean).map(esc).join('<i>·</i>')}</div>
+      ${tags.length ? `<div class="x-tags">${tags.map(t => `<span>${t}</span>`).join('')}</div>` : ''}
+    </div>`;
+}
 
 // System tags, worked out from the book and its reading record whenever they are shown and never
 // stored, so they can't overwrite or remove the user's own tags (m.userTags) and are always current.
@@ -441,7 +474,9 @@ const Library = {
       fitTitles(cont);
     }
 
-    const grid = document.getElementById('grid');
+    const grid = document.getElementById('grid'), mode = shelfMode();
+    SHELF_MODES.forEach(m => grid.classList.toggle('mode-' + m.key, m.key === mode));
+    this.renderModeBtn();
     requestAnimationFrame(() => { fitShelf(); fitTitles(grid); });
     if (!this.books.length || (!list.length && this.filter === 'all' && !this.showHidden)) {
       grid.innerHTML = `
@@ -455,12 +490,12 @@ const Library = {
       return;
     }
     if (!list.length) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">这里还没有书</p></div>`; return; }
-    grid.innerHTML = list.map(b => {
+    grid.innerHTML = list.map((b, i) => {
       if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
       const st = statusOf(b), pct = b.progress?.pct || 0;
       const sub = st === 'done' ? (b.reads ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
       return `
-        <div class="card${this.selected.has(b.id) ? ' picked' : ''}" data-id="${esc(b.id)}">
+        <div class="card${this.selected.has(b.id) ? ' picked' : ''}${mode === 'wall' ? wallClass(i) : ''}" data-id="${esc(b.id)}">
           <div class="card-cover">
             ${jacket(b)}
             ${b.pinned ? `<span class="pin-badge">${ICON.pin}</span>` : ''}
@@ -471,6 +506,7 @@ const Library = {
             <div class="t">${esc(bookName(b.title))}</div>
             <div class="s">${b.rating ? `<span class="stars">${'★'.repeat(starCount(b.rating))}</span>` : ''}${esc(sub)}</div>
             <div class="progress"><i style="width:${st === 'done' ? 100 : pct}%"></i></div>
+            ${mode === 'shelf' ? '' : cardExtra(b, i, st, pct)}
           </div>
         </div>`;
     }).join('');
@@ -538,6 +574,7 @@ const Library = {
       this.render();
     };
     document.getElementById('btn-select').onclick = () => this.enterSelect();
+    document.getElementById('btn-mode').onclick = e => { e.stopPropagation(); this.openModeMenu(); };
     this.bindSelectBar();
   },
 
@@ -870,6 +907,36 @@ const Library = {
   },
 
   // ================= Multi-select mode =================
+  // ---------- display mode switch ----------
+  renderModeBtn() {
+    const btn = document.getElementById('btn-mode'), m = SHELF_MODES.find(x => x.key === shelfMode());
+    btn.innerHTML = `${m.icon}<span>${m.name}</span>`;
+    btn.classList.toggle('hidden', !this.books.length);
+  },
+  openModeMenu() {
+    document.querySelector('.mode-menu')?.remove();
+    const btn = document.getElementById('btn-mode'), r = btn.getBoundingClientRect(), cur = shelfMode();
+    const menu = document.createElement('div');
+    menu.className = 'mode-menu';
+    menu.innerHTML = SHELF_MODES.map(m => `<button data-mode="${m.key}" class="${m.key === cur ? 'on' : ''}">${m.icon}<span>${m.name}</span></button>`).join('');
+    menu.style.top = (r.bottom + 6) + 'px';
+    menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+    document.body.appendChild(menu);
+    menu.animate([{ opacity: 0, transform: 'translateY(-4px) scale(.97)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    const close = () => { menu.remove(); removeEventListener('pointerdown', outside, true); };
+    const outside = e => { if (!menu.contains(e.target) && !btn.contains(e.target)) close(); };
+    setTimeout(() => addEventListener('pointerdown', outside, true));
+    menu.onclick = e => {
+      const b = e.target.closest('[data-mode]');
+      if (!b) return;
+      close();
+      if (b.dataset.mode === cur) return;
+      try { localStorage.setItem(MODE_KEY, b.dataset.mode); } catch {}
+      document.getElementById('shelf').scrollTop = 0; scrollTo(0, 0);
+      this.render();
+    };
+  },
+
   enterSelect() {
     this.selecting = true;
     this.selected.clear();
