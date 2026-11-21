@@ -683,7 +683,7 @@ const Reader = {
       if (bn) {
         const rec = this.annots.find(a => a.id === bn.dataset.bmnote);
         if (!rec) return;
-        const v = await promptDialog({ title: '书签备注', value: rec.note || '', placeholder: '写一句话，比如为什么在这里停下', ok: '保存', max: 80 });
+        const v = await promptDialog({ title: '书签备注', value: rec.note || '', placeholder: '写下这处的备注', ok: '保存', max: 80 });
         if (v === null || v === rec.note) return;
         this.updateAnnot(rec, { note: v });
         const item = bn.closest('.li');

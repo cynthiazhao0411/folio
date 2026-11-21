@@ -19,7 +19,7 @@
 // (iOS does this to background tabs), tapping the bookmark again offers to continue with
 // only the works that are left. The screen is kept awake while a batch runs.
 (async () => {
-  const CFG = { token: '__TOKEN__', inbox: '__INBOX__', repo: '__REPO__', branch: '__BRANCH__' };
+  const CFG = { token: '__TOKEN__', inbox: '__INBOX__', repo: '__REPO__', branch: '__BRANCH__', app: '__APP__', installed: '__INSTALLED__', shortcut: '__SHORTCUT__' };
   const API = CFG.repo ? 'https://api.github.com/repos/' + CFG.repo : 'https://api.github.com/gists/' + CFG.inbox;
   // The browser's own fetch, taken from a fresh frame, so a site script that replaced window.fetch
   // does not get to see the token (this narrows the risk; it cannot rule out a hostile page)
@@ -56,8 +56,9 @@
       .m { color: #6f665d; font-size: 13px; margin: 6px 0 10px; min-height: 1.5em; white-space: pre-line; }
       .m em { font-style: normal; font-size: 11px; color: #a0522d; background: #ece3d2; border-radius: 999px; padding: 1px 8px; margin-right: 6px; white-space: nowrap; vertical-align: 1px; }
       .r { display: flex; gap: 8px; flex-wrap: wrap; }
-      button.b { flex: 1; border: 0; border-radius: 999px; padding: 9px 12px; font: inherit; font-size: 14px;
-                 background: #e9e1d3; color: #2b2622; }
+      button.b, a.b { flex: 1; border: 0; border-radius: 999px; padding: 9px 12px; font: inherit; font-size: 14px;
+                 background: #e9e1d3; color: #2b2622; text-align: center; text-decoration: none; box-sizing: border-box; }
+      a.b.a { background: #a0522d; color: #fff; }
       button.b.a { background: #a0522d; color: #fff; }
       button.b:disabled { opacity: .45 }
       .bar { height: 3px; background: #e9e1d3; border-radius: 2px; overflow: hidden; margin-bottom: 10px; display: none; }
@@ -76,7 +77,7 @@
     m.textContent = '';
     const [first, ...rest] = t.split('\n');
     // The title of the work being fetched goes in front of the progress text
-    if (tag) { const e = document.createElement('em'); e.textContent = `《${tag}》`; m.append(e); }
+    if (tag) { const e = document.createElement('em'); e.textContent = tag; m.append(e); }
     m.append(first);
     if (rest.length) m.append('\n' + rest.join('\n'));
   };
@@ -90,12 +91,37 @@
   const buttons = list => {
     $('.r').innerHTML = '';
     for (const [label, fn, accent] of list) {
-      const b = document.createElement('button');
+      // A string instead of a function makes a real link: the tap itself opens it, which is what
+      // browsers require before they hand a link to an installed app or to another app
+      const link = typeof fn === 'string', b = document.createElement(link ? 'a' : 'button');
       b.className = 'b' + (accent ? ' a' : '');
       b.textContent = label;
-      b.onclick = fn;
+      if (link) { b.href = fn; if (/^https?:/.test(fn)) { b.target = '_blank'; b.rel = 'noopener'; } b.onclick = () => setTimeout(() => window.__folio?.close(), 400); }
+      else b.onclick = fn;
       $('.r').appendChild(b);
     }
+  };
+  // "打开 Folio" after delivery. What can really open the installed app differs by platform:
+  //  • Computer / Android, bookmark copied from the installed Folio window: a web+folio:// link. Folio's
+  //    manifest declares it (protocol_handlers); Chrome and Edge register it with the system when Folio
+  //    is installed, so the tap opens the Folio app window (the browser may ask once to allow it).
+  //    "在浏览器打开" stays as the second button for when that is not set up.
+  //  • Computer / Android otherwise: a link to Folio's own address. Chrome 139+ opens such a link in
+  //    the installed app when there is one (navigation capturing); otherwise in a tab of the same
+  //    browser, with the same books.
+  //  • iPhone: Safari cannot open a home-screen web app, and Folio in a Safari tab keeps a separate,
+  //    empty shelf. If the user set up the Shortcuts route, a shortcuts:// link runs their "打开 Folio"
+  //    shortcut (iOS asks first); otherwise the panel says to go back to Folio, which collects the new
+  //    works by itself as soon as it comes to the front.
+  // The marker (#from=collect / ?open=) makes Folio collect the inbox at once.
+  const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const APP = /^https?:\/\//.test(CFG.app) ? CFG.app : '';
+  const SHORTCUT = CFG.shortcut && !CFG.shortcut.startsWith('__') ? CFG.shortcut : '';
+  const openButtons = () => {
+    if (IOS) return SHORTCUT ? [['用快捷指令打开 Folio', 'shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT), true], ['好', () => window.__folio.close()]] : null;
+    if (!APP) return null;
+    const web = APP + '#from=collect';
+    return CFG.installed === 'yes' ? [['打开 Folio', 'web+folio://collect', true], ['在浏览器打开', web]] : [['打开 Folio', web, true], ['好', () => window.__folio.close()]];
   };
   const marks = [];
   window.__folio = { close() { host.remove(); marks.forEach(m => m.remove()); delete window.__folio; } };
@@ -234,8 +260,11 @@
         say('已复制，打开 Folio 粘贴吧');
       }, true], ['关闭', () => window.__folio.close()]]);
     } else {
-      say(n ? `已送到 Folio ✓ 共 ${n} 篇\n打开 Folio 就能看到。${extra}` : '没有需要送的作品。' + extra);
-      buttons([['好', () => window.__folio.close(), true]]);
+      const open = n ? openButtons() : null;
+      const how = IOS ? (open ? '点下面的按钮，或回到主屏幕的 Folio，新书会自己出现。' : '回到主屏幕的 Folio（或从 App 切换器切回去），新书会自己出现。')
+        : open ? '点「打开 Folio」就能看到。' : '打开 Folio 就能看到。';
+      say(n ? `已送到 Folio ✓ 共 ${n} 篇\n${how}${extra}` : '没有需要送的作品。' + extra);
+      buttons(open || [['好', () => window.__folio.close(), true]]);
     }
   }
   // Send a batch; `job` is the saved record, so a reload can pick up where this stopped
@@ -422,7 +451,7 @@
     const first = [...list].sort((a, b) => order.indexOf(a.ext) - order.indexOf(b.ext))[0];
     const picked = new Set([first.url]);
     const draw = () => {
-      say(`《${title.slice(0, 24)}》${info.authors.length ? ' · ' + info.authors.join('、').slice(0, 20) : ''}\n这一页有 ${list.length} 个电子书文件，选要送到 Folio 的：\n` + list.map((f, i) => `${picked.has(f.url) ? '☑' : '☐'} ${i + 1}. ${f.ext.toUpperCase()} · ${f.label.slice(0, 30)}`).join('\n'));
+      say(`${title.slice(0, 24)}${info.authors.length ? ' · ' + info.authors.join('、').slice(0, 20) : ''}\n这一页有 ${list.length} 个电子书文件，选要送到 Folio 的：\n` + list.map((f, i) => `${picked.has(f.url) ? '☑' : '☐'} ${i + 1}. ${f.ext.toUpperCase()} · ${f.label.slice(0, 30)}`).join('\n'));
       buttons([
         ...list.slice(0, 6).map((f, i) => [`${picked.has(f.url) ? '✓ ' : ''}${i + 1}`, () => { picked.has(f.url) ? picked.delete(f.url) : picked.add(f.url); draw(); }]),
         [`送出 ${picked.size} 个`, () => picked.size && sendFiles(list.filter(f => picked.has(f.url)), title, info), true],

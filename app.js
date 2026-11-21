@@ -514,6 +514,24 @@ document.getElementById('btn-turn').onclick = () => {
 };
 
 // ================= Backup / restore =================
+// Opened from the 收书 panel's "打开 Folio": either a link to Folio's own address marked #from=collect
+// (Chrome opens it in the installed app: navigation capturing) or a web+folio:// link (the manifest's
+// protocol_handlers, which Chrome registers with the operating system when Folio is installed; it
+// arrives as ?open=...). Either way, collect the inbox now and show the shelf. When Folio is already
+// open, launch_handler focus-existing brings that window forward and the launch arrives in launchQueue.
+// The marker is removed from the address so a reload does not repeat it.
+const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio/i;
+const fromCollect = FROM_COLLECT.test(location.href);
+if (fromCollect) history.replaceState(null, '', location.pathname);
+async function collectNow() {
+  if (!Sync.on) return;
+  await Sync.check(true);
+  if (Sync.reading()) return;                              // never under an open book; the shelf redraws on close
+  await Library.render();
+}
+if (fromCollect) addEventListener('load', () => setTimeout(collectNow, 300));
+if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(); });
+
 function toast(msg) {
   const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: msg });
   document.body.appendChild(t);

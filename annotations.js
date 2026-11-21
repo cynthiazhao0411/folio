@@ -174,11 +174,37 @@ Object.assign(Reader, {
     } else {
       const off = this.firstOffsetOnPage(v, this.page);
       const text = v.idx.text.slice(off, off + 80).replace(/\s+/g, ' ').trim();
-      this.addAnnot({ type: 'bookmark', ch: this.ch, start: off, end: off, text });
-      if (!quiet) toast('已添加书签');
+      const rec = this.addAnnot({ type: 'bookmark', ch: this.ch, start: off, end: off, text });
+      this.bookmarkHint(rec);
     }
     this.updateRibbon(v, this.ch, this.page);
     this.syncBookmarkBtn();
+  },
+
+  // A light hint under the ribbon after a bookmark is added: "已加书签 · 写备注". Tapping 写备注 opens
+  // the note box for this bookmark; otherwise it fades by itself and nothing else changes.
+  bookmarkHint(rec) {
+    document.querySelector('.bm-hint')?.remove();
+    const h = document.createElement('div');
+    h.className = 'bm-hint';
+    h.innerHTML = '<span>已加书签</span><button type="button">写备注</button>';
+    const stop = e => e.stopPropagation();
+    ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'mousedown', 'mouseup'].forEach(t => h.addEventListener(t, stop));
+    h.querySelector('button').onclick = async e => {
+      e.stopPropagation(); h.remove(); this.el.reader.classList.remove('bm-hinting');
+      const v = await promptDialog({ title: '书签备注', value: rec.note || '', placeholder: '写下这处的备注', ok: '保存', max: 80 });
+      if (v === null || v === rec.note || !this.annots.includes(rec)) return;
+      this.updateAnnot(rec, { note: v });
+      toast('备注已保存');
+    };
+    // It sits in the running-header row (above the text), and the chapter name there steps aside meanwhile
+    this.el.reader.appendChild(h);
+    this.el.reader.classList.add('bm-hinting');
+    clearTimeout(this._bmHint);
+    this._bmHint = setTimeout(() => {
+      h.classList.add('out'); this.el.reader.classList.remove('bm-hinting');
+      setTimeout(() => h.remove(), 700);
+    }, 4200);
   },
 
   // ---- Pull down to bookmark ----

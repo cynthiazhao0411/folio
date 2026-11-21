@@ -142,7 +142,7 @@ function fitShelf() {
   const row3End = top + 3 * rowH + 2 * rg;
   grid.style.setProperty('--tail', Math.max(0, innerHeight - row3End - rg + 2) + 'px');
 }
-addEventListener('resize', () => { fitShelf(); const g = document.getElementById('grid'); if (g) fitTitles(g); });
+addEventListener('resize', () => { fitShelf(); const g = document.getElementById('grid'); if (g) { layoutWall(g); fitTitles(g); } });
 document.fonts?.ready.then(() => { const g = document.getElementById('grid'); if (g) fitTitles(g); });
 
 // Reading status: set by hand, or inferred from progress and finished read-throughs
@@ -163,24 +163,108 @@ const SHELF_MODES = [
   { key: 'wall', name: '封面墙', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="3.5" width="9" height="12" rx="1"/><rect x="15" y="3.5" width="5.5" height="7.5" rx="1"/><rect x="15" y="13" width="5.5" height="7.5" rx="1"/><path d="M3.5 19h9M3.5 21h6"/></svg>' },
 ];
 const MODE_KEY = 'folio-shelf-mode';
+const ICON_SORT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M3.5 16.5 7 20l3.5-3.5M17 20V4M13.5 7.5 17 4l3.5 3.5"/></svg>';
 function shelfMode() {
   let m; try { m = localStorage.getItem(MODE_KEY); } catch {}
   return SHELF_MODES.some(x => x.key === m) ? m : 'shelf';
 }
 
-// Cover wall rhythm: a large plate opens every group of nine; on the phone the right-hand
-// column of each group is set a little lower, like plates on facing pages
-function wallClass(i) {
-  const k = i % 9;
-  return k === 0 ? ' plate' : (k % 2 === 0 ? ' lo' : '');
+// Shelf order. Pinned books always come first; within them and the rest the chosen order applies.
+// Each order has a natural direction (newest first, A to Z, highest first, ...); tapping the chosen
+// order again reverses it. Books without a value (no rating, no length) stay last either way.
+// Like the display mode, the choice is this device's view preference (localStorage).
+const SORTS = [
+  { key: 'recent', name: '最近阅读', val: b => b.lastReadAt || b.addedAt || 0, desc: true },
+  { key: 'added', name: '最近添加', val: b => b.addedAt || 0, desc: true },
+  { key: 'title', name: '书名', val: b => bookName(b.title || ''), text: true },
+  { key: 'author', name: '作者', val: b => (b.authors || [])[0] || '', text: true },
+  { key: 'rating', name: '评分', val: b => b.rating || null, desc: true },
+  { key: 'progress', name: '阅读进度', val: b => statusOf(b) === 'done' ? 101 : b.progress?.pct || 0, desc: true },
+  { key: 'words', name: '字数', val: b => b.words || null, desc: true },
+];
+const SORT_KEY = 'folio-shelf-sort';
+const collator = new Intl.Collator('zh-Hans-CN-u-co-pinyin', { numeric: true, sensitivity: 'base' });
+function shelfSort() {
+  let s; try { s = JSON.parse(localStorage.getItem(SORT_KEY)); } catch {}
+  const def = SORTS.find(x => x.key === s?.key) || SORTS[0];
+  return { def, rev: !!s?.rev && def === SORTS.find(x => x.key === s?.key) };
+}
+function sortBooks(list) {
+  const { def, rev } = shelfSort(), dir = (def.desc ? -1 : 1) * (rev ? -1 : 1);
+  const recent = SORTS[0].val;
+  return list.map(b => ({ b, v: def.val(b) })).sort((x, y) => {
+    const p = (y.b.pinned || 0) - (x.b.pinned || 0);
+    if (p) return p;
+    const nx = x.v === null || x.v === '', ny = y.v === null || y.v === '';
+    if (nx !== ny) return nx ? 1 : -1;                       // missing values last, whatever the direction
+    const c = nx ? 0 : def.text ? collator.compare(x.v, y.v) : x.v - y.v;
+    return c * dir || recent(y.b) - recent(x.b) || collator.compare(bookName(x.b.title || ''), bookName(y.b.title || ''));
+  }).map(x => x.b);
+}
+
+// Cover wall (封面墙): books displayed on ledges, like a private collection on picture rails.
+// Each jacket's height follows the book's length (短篇 shorter, 长篇 tallest), so the variety on the
+// wall comes from the books themselves. Books keep the shelf's order, left to right; each ledge is
+// justified to the full width, and the last ledge is balanced against the one before it, so no
+// ledge ends in a gap and no book is left on its own. Captions hang under the ledge like museum
+// labels; a plate wide enough also shows the summary and tags. Only a shelf too small to fill one
+// ledge (one or two books) is shown centred, at the largest size.
+const WALL_REL = b => { const w = b?.words || 0; return !w ? .9 : w < 30000 ? .8 : w < 100000 ? .9 : 1; };
+const JACKET = 2 / 3;                                     // jacket width : height
+function wallMetrics(width) {
+  return width < 600 ? { H: 300, max: 345, min: 200, gap: 16, most: 3 }
+    : width < 1000 ? { H: 300, max: 345, min: 215, gap: 26, most: 5 } : { H: 330, max: 380, min: 240, gap: 34, most: 8 };
+}
+// Split the books (in order) into ledges so that every ledge, the last one included, comes as close
+// as possible to the ideal height: dynamic programming over where each ledge ends. A ledge's height
+// is what makes its jackets fill the width exactly; ledges that would have to stand taller than
+// `max` are only accepted when nothing else can work (a shelf of one or two books), and are centred.
+function planWall(rels, W) {
+  const m = wallMetrics(W), n = rels.length, pre = [0];
+  for (const r of rels) pre.push(pre.at(-1) + r * JACKET);
+  const height = (a, b) => (W - m.gap * (b - a - 1)) / (pre[b] - pre[a]);       // books a..b-1
+  const cost = (a, b) => { const h = height(a, b); return (h > m.max ? 1e6 + (h - m.max) * 100 : h < m.min ? 1e5 + (m.min - h) * 100 : 0) + ((h - m.H) / m.H) ** 2; };
+  const best = [0], from = [0];
+  for (let b = 1; b <= n; b++) {
+    best[b] = Infinity;
+    for (let a = Math.max(0, b - m.most); a < b; a++) { const c = best[a] + cost(a, b); if (c < best[b]) { best[b] = c; from[b] = a; } }
+  }
+  const rows = [];
+  for (let b = n; b > 0; b = from[b]) rows.unshift([from[b], b]);
+  return rows.map(([a, b]) => { const h = height(a, b); return { items: Array.from({ length: b - a }, (_, k) => a + k), h: Math.min(h, m.max), centred: h > m.max + .5 }; });
+}
+function layoutWall(grid) {
+  if (!grid?.classList.contains('mode-wall')) return;
+  const cards = [...grid.querySelectorAll('.card')];
+  if (!cards.length) return;
+  const W = grid.clientWidth, m = wallMetrics(W);
+  const rels = cards.map(c => +c.dataset.rel || .9);
+  grid.style.setProperty('--wgap', m.gap + 'px');
+  for (const { items, h, centred } of planWall(rels, W)) {
+    const widths = items.map(k => rels[k] * JACKET * h), used = widths.reduce((s, w) => s + w, 0) + m.gap * (items.length - 1);
+    items.forEach((k, j) => {
+      const c = cards[k], w = widths[j], ch = rels[k] * h;
+      c.classList.toggle('w-first', j === 0);
+      c.classList.toggle('w-last', j === items.length - 1);
+      c.classList.toggle('w-roomy', w >= 150);
+      c.style.width = w + 'px';
+      c.style.marginLeft = j === 0 && centred ? (W - used) / 2 + 'px' : '';
+      c.style.setProperty('--ledge', h + 'px');       // all jackets on a ledge stand on the same line
+      c.style.setProperty('--jh', ch + 'px');
+      c.style.setProperty('--jw', w + 'px');
+      c.querySelector('.cover').style.fontSize = (w / 12.5).toFixed(1) + 'px';
+    });
+  }
 }
 // The extra lines list and wall modes show (the shelf mode keeps its card as it was)
+const plainText = html => (Object.assign(document.createElement('div'), { innerHTML: html }).textContent || '').replace(/\s+/g, ' ').trim();
 function cardExtra(b, i, st, pct) {
   const tags = systemTags(b), au = (b.authors || []).join('、');
   const w = b.words ? (b.words >= 10000 ? (b.words / 10000).toFixed(1).replace(/\.0$/, '') + ' 万字' : b.words + ' 字') : '';
   return `<div class="x">
       <div class="x-no">No. ${String(i + 1).padStart(2, '0')}</div>
       ${au ? `<div class="x-au">${esc(au)}</div>` : ''}
+      ${b.summary ? `<div class="x-sum">${esc(plainText(b.summary).slice(0, 220))}</div>` : ''}
       <div class="x-meta">${[w, b.chapterCount ? b.chapterCount + ' 章' : ''].filter(Boolean).map(esc).join('<i>·</i>')}</div>
       ${tags.length ? `<div class="x-tags">${tags.map(t => `<span>${t}</span>`).join('')}</div>` : ''}
     </div>`;
@@ -425,10 +509,10 @@ const Library = {
 
   visible() {
     const f = this.filter;
-    return this.books
+    const list = this.books
       .filter(b => !!b.hidden === this.showHidden)
-      .filter(b => f === 'all' || (f.startsWith('f:') ? b.folder === f.slice(2) : (b.userTags || []).includes(f.slice(2))))
-      .sort((a, b) => (b.pinned || 0) - (a.pinned || 0) || (b.lastReadAt || b.addedAt) - (a.lastReadAt || a.addedAt));
+      .filter(b => f === 'all' || (f.startsWith('f:') ? b.folder === f.slice(2) : (b.userTags || []).includes(f.slice(2))));
+    return sortBooks(list);
   },
 
   // ---------- rendering ----------
@@ -495,7 +579,7 @@ const Library = {
       const st = statusOf(b), pct = b.progress?.pct || 0;
       const sub = st === 'done' ? (b.reads ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
       return `
-        <div class="card${this.selected.has(b.id) ? ' picked' : ''}${mode === 'wall' ? wallClass(i) : ''}" data-id="${esc(b.id)}">
+        <div class="card${this.selected.has(b.id) ? ' picked' : ''}" data-id="${esc(b.id)}"${mode === 'wall' ? ` data-rel="${WALL_REL(b)}"` : ''}>
           <div class="card-cover">
             ${jacket(b)}
             ${b.pinned ? `<span class="pin-badge">${ICON.pin}</span>` : ''}
@@ -510,6 +594,7 @@ const Library = {
           </div>
         </div>`;
     }).join('');
+    if (mode === 'wall') layoutWall(grid);
     fitTitles(grid);
     this.updateSelectBar();
   },
@@ -575,6 +660,7 @@ const Library = {
     };
     document.getElementById('btn-select').onclick = () => this.enterSelect();
     document.getElementById('btn-mode').onclick = e => { e.stopPropagation(); this.openModeMenu(); };
+    document.getElementById('btn-sort').onclick = e => { e.stopPropagation(); this.openSortMenu(); };
     this.bindSelectBar();
   },
 
@@ -912,13 +998,30 @@ const Library = {
     const btn = document.getElementById('btn-mode'), m = SHELF_MODES.find(x => x.key === shelfMode());
     btn.innerHTML = `${m.icon}<span>${m.name}</span>`;
     btn.classList.toggle('hidden', !this.books.length);
+    const sb = document.getElementById('btn-sort'), { def, rev } = shelfSort();
+    const arrow = (def.desc ? !rev : rev) ? '↓' : '↑';
+    sb.innerHTML = `${ICON_SORT}<span>${def.name}</span><b>${arrow}</b>`;
+    sb.setAttribute('aria-label', `排序：${def.name}`);
+    sb.classList.toggle('hidden', !this.books.length);
   },
-  openModeMenu() {
+  openSortMenu() {
+    const cur = shelfSort();
+    this.popMenu(document.getElementById('btn-sort'), SORTS.map(s => {
+      const on = s === cur.def, down = s.desc ? !(on && cur.rev) : on && cur.rev;
+      return `<button data-sort="${s.key}" class="${on ? 'on' : ''}"><span>${s.name}</span>${on ? `<b>${down ? '↓' : '↑'}</b>` : ''}</button>`;
+    }).join('') + '<p class="menu-note">置顶的书始终在最前 · 再点一次当前排序可反向</p>', b => {
+      const key = b.dataset.sort; if (!key) return;
+      const rev = key === cur.def.key ? !cur.rev : false;
+      try { localStorage.setItem(SORT_KEY, JSON.stringify({ key, rev })); } catch {}
+      this.render();
+    });
+  },
+  // A small menu under a header button; `pick` gets the tapped item
+  popMenu(btn, html, pick) {
     document.querySelector('.mode-menu')?.remove();
-    const btn = document.getElementById('btn-mode'), r = btn.getBoundingClientRect(), cur = shelfMode();
-    const menu = document.createElement('div');
+    const r = btn.getBoundingClientRect(), menu = document.createElement('div');
     menu.className = 'mode-menu';
-    menu.innerHTML = SHELF_MODES.map(m => `<button data-mode="${m.key}" class="${m.key === cur ? 'on' : ''}">${m.icon}<span>${m.name}</span></button>`).join('');
+    menu.innerHTML = html;
     menu.style.top = (r.bottom + 6) + 'px';
     menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
     document.body.appendChild(menu);
@@ -926,16 +1029,18 @@ const Library = {
     const close = () => { menu.remove(); removeEventListener('pointerdown', outside, true); };
     const outside = e => { if (!menu.contains(e.target) && !btn.contains(e.target)) close(); };
     setTimeout(() => addEventListener('pointerdown', outside, true));
-    menu.onclick = e => {
-      const b = e.target.closest('[data-mode]');
-      if (!b) return;
-      close();
+    menu.onclick = e => { const b = e.target.closest('button'); if (!b) return; close(); pick(b); };
+  },
+  openModeMenu() {
+    const cur = shelfMode();
+    this.popMenu(document.getElementById('btn-mode'), SHELF_MODES.map(m => `<button data-mode="${m.key}" class="${m.key === cur ? 'on' : ''}">${m.icon}<span>${m.name}</span></button>`).join(''), b => {
       if (b.dataset.mode === cur) return;
       try { localStorage.setItem(MODE_KEY, b.dataset.mode); } catch {}
       document.getElementById('shelf').scrollTop = 0; scrollTo(0, 0);
       this.render();
-    };
+    });
   },
+
 
   enterSelect() {
     this.selecting = true;

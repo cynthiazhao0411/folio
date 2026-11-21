@@ -1016,52 +1016,88 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 .grid.mode-list .card-info .progress { order: 6; margin-top: auto; position: relative; top: 8px; max-width: 220px; }
 .grid.mode-list .pick { transform: scale(.75); transform-origin: top left; }
 
-/* ---- 封面墙: covers mounted like plates in a private catalogue ---- */
-#shelf .grid.mode-wall { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 56px 40px; min-width: 0; grid-auto-flow: row dense; padding: 8px 0 24px; }
-.grid.mode-wall .card-cover { padding: 14px; background: color-mix(in srgb, var(--card) 72%, var(--bg)); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 18px 30px -24px rgba(0,0,0,.35); }
-.grid.mode-wall .cover { font-size: 13.5px; border-radius: 1px 4px 4px 1px; box-shadow: 0 14px 24px -12px rgba(0,0,0,.45), inset 7px 0 8px -5px rgba(0,0,0,.3); }
-.grid.mode-wall .pin-badge { top: 20px; right: 20px; }
-.grid.mode-wall .new-badge { top: 20px; left: 20px; }
-.grid.mode-wall .card { min-width: 0; }
-.grid.mode-wall .card-info { margin-top: 14px; min-width: 0; text-align: center; display: flex; flex-direction: column; align-items: center; }
-.grid.mode-wall .x { display: contents; }
-.grid.mode-wall .x-no { order: 0; font-family: var(--folio-serif); font-size: 10px; letter-spacing: .22em; color: var(--accent); }
-.grid.mode-wall .card-info .t { order: 1; font-family: var(--folio-serif); font-size: 14.5px; line-height: 1.45; letter-spacing: .05em; margin-top: 5px; max-width: 100%;
-  white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.grid.mode-wall .x-au { order: 2; font-size: 10.5px; letter-spacing: .18em; color: var(--muted); margin-top: 4px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.grid.mode-wall .card-info .s { order: 3; font-size: 10.5px; margin-top: 6px; letter-spacing: .04em; }
-.grid.mode-wall .x-meta, .grid.mode-wall .x-tags { display: none; }
-.grid.mode-wall .card-info .progress { order: 4; width: 36px; height: 1px; margin-top: 9px; }
-/* The plate: one book a group shown large, the caption set beside it */
-.grid.mode-wall .card.plate { grid-column: span 2; align-self: start; display: grid; grid-template-columns: minmax(0, 46%) 1fr; gap: 0 32px; align-items: center; }
-.grid.mode-wall .plate .cover { font-size: 15.5px; }
-.grid.mode-wall .plate .card-info { margin: 0; text-align: left; align-items: flex-start; }
-.grid.mode-wall .plate .x-no { font-size: 11px; }
-.grid.mode-wall .plate .card-info .t { font-size: 22px; line-height: 1.4; margin-top: 10px; -webkit-line-clamp: 3; }
-.grid.mode-wall .plate .x-au { font-size: 11.5px; margin-top: 8px; }
-.grid.mode-wall .plate .card-info .s { font-size: 12px; margin-top: 14px; }
-.grid.mode-wall .plate .x-meta { display: block; order: 5; font-size: 11px; color: var(--muted); margin-top: 4px; }
-.grid.mode-wall .plate .x-tags { display: flex; order: 6; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
-.grid.mode-wall .plate .card-info .progress { order: 4; width: 56px; margin-top: 14px; }
 @media (max-width: 600px) {
   #shelf .grid.mode-list { gap: 0; }
   .grid.mode-list .card { grid-template-columns: 52px 1fr; gap: 14px; padding: 14px 0; }
   .grid.mode-list .cover { font-size: 4.9px; }
   .grid.mode-list .card-info { min-height: 78px; }
   .grid.mode-list .card-info .t { font-size: 14.5px; }
-  #shelf .grid.mode-wall { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 38px 18px; padding: 6px 0 52px; }
-  .grid.mode-wall .card-cover { padding: 10px; }
-  .grid.mode-wall .cover { font-size: 11.5px; }
-  .grid.mode-wall .pin-badge { top: 15px; right: 15px; }
-  .grid.mode-wall .new-badge { top: 15px; left: 15px; font-size: 9px; padding: 2px 6px; }
-  .grid.mode-wall .card.lo { transform: translateY(34px); }
-  .grid.mode-wall .card-info .t { font-size: 13.5px; }
-  .grid.mode-wall .card.plate { gap: 0 18px; grid-template-columns: minmax(0, 52%) 1fr; margin-bottom: 4px; }
-  .grid.mode-wall .plate .cover { font-size: 13px; }
-  .grid.mode-wall .plate .card-info .t { font-size: 18px; margin-top: 8px; }
-  .grid.mode-wall .plate .card-info .s { margin-top: 10px; }
-  .grid.mode-wall .plate .x-tags { margin-top: 10px; }
-  .grid.mode-wall .plate .card-info .progress { margin-top: 10px; }
   .mode-btn span { letter-spacing: .02em; }
 }
+
+/* Hint after adding a bookmark: light, never in the way, fades by itself */
+.bm-hint { position: absolute; z-index: 30; top: calc(env(safe-area-inset-top) + 6px); left: 50%; translate: -50% 0;
+  display: flex; align-items: center; gap: .2em; padding: .25em .3em .25em 1em; border-radius: 2em; white-space: nowrap;
+  background: color-mix(in srgb, var(--card) 92%, transparent); border: 1px solid var(--line); color: var(--muted);
+  font-size: 12px; line-height: 1.5; letter-spacing: .05em; box-shadow: 0 8px 22px -12px rgba(0,0,0,.3);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  animation: bmHintIn .35s cubic-bezier(.2,.8,.2,1); transition: opacity .7s ease, transform .7s ease; }
+#reader .view .running.header { transition: opacity .4s ease; }
+#reader.bm-hinting .view .running.header { opacity: 0; }
+.bm-hint.out { opacity: 0; transform: translateY(-6px); pointer-events: none; }
+.bm-hint button { border: none; background: none; color: var(--accent); font: inherit; letter-spacing: .05em; padding: .2em .75em; border-radius: 2em; cursor: pointer; }
+.bm-hint button:active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@keyframes bmHintIn { from { opacity: 0; transform: translateX(8px); } }
+
+/* ---- 封面墙: books on ledges (library.js layoutWall sets each card's width and its ledge height).
+   The jacket stands on the ledge line; the caption hangs below it like a museum label. ---- */
+#shelf .grid.mode-wall { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 64px var(--wgap, 34px); padding: 14px 0 48px; }
+.grid.mode-wall .card { flex: none; min-width: 0; position: relative; }
+.grid.mode-wall .card-cover { height: var(--ledge); display: flex; align-items: flex-end; position: relative; }
+.grid.mode-wall .card-cover > .cover { width: var(--jw); height: var(--jh); flex: none; aspect-ratio: auto; border-radius: 1px 3px 3px 1px;
+  box-shadow: 0 16px 22px -16px rgba(40,25,10,.55), 0 2px 4px -2px rgba(40,25,10,.3), inset 7px 0 8px -6px rgba(0,0,0,.3); }
+/* the ledge: a hairline under the row, carried across the gaps */
+.grid.mode-wall .card-cover::after { content: ''; position: absolute; left: 0; right: calc(-1 * var(--wgap, 34px)); bottom: -1px; height: 1px;
+  background: color-mix(in srgb, var(--fg) 16%, transparent); pointer-events: none; }
+.grid.mode-wall .w-last .card-cover::after { right: 0; }
+.grid.mode-wall .card-cover::before { content: ''; position: absolute; left: -4px; right: calc(-1 * var(--wgap, 34px) - 4px); bottom: -9px; height: 8px;
+  background: linear-gradient(to bottom, rgba(40,25,10,.07), transparent); pointer-events: none; }
+.grid.mode-wall .w-last .card-cover::before { right: -4px; }
+.grid.mode-wall .pin-badge { top: calc(var(--ledge) - var(--jh) + 7px); right: 7px; }
+.grid.mode-wall .new-badge { top: calc(var(--ledge) - var(--jh) + 8px); left: 8px; }
+.grid.mode-wall .pick { top: calc(var(--ledge) - var(--jh) + 8px); }
+.grid.mode-wall .card:active .cover { transform: translateY(-2px); }
+
+/* the label */
+.grid.mode-wall .x { display: contents; }
+.grid.mode-wall .card-info { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; min-width: 0; }
+.grid.mode-wall .x-no { order: 0; font-family: var(--folio-serif); font-size: 10px; letter-spacing: .22em; color: var(--accent); }
+.grid.mode-wall .card-info .t { order: 1; margin-top: 5px; font-family: var(--folio-serif); font-size: 15px; line-height: 1.42; letter-spacing: .03em;
+  white-space: normal; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.grid.mode-wall .x-au { order: 2; margin-top: 3px; font-size: 10.5px; letter-spacing: .14em; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid.mode-wall .card-info .s { order: 3; margin-top: 7px; font-size: 11px; letter-spacing: .02em; }
+.grid.mode-wall .card-info .progress { order: 4; width: 30px; height: 1px; margin-top: 8px; }
+.grid.mode-wall .x-sum { order: 5; display: none; margin-top: 10px; font-family: var(--folio-serif); font-size: 12px; line-height: 1.7; color: var(--muted);
+  -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.grid.mode-wall .x-tags { order: 6; display: none; flex-wrap: wrap; gap: 4px; margin-top: 9px; }
+.grid.mode-wall .x-meta { display: none; }
+.grid.mode-wall .w-roomy .x-sum { display: -webkit-box; }
+.grid.mode-wall .w-roomy .x-tags { display: flex; }
+@media (max-width: 600px) {
+  #shelf .grid.mode-wall { row-gap: 44px; padding: 8px 0 36px; }
+  .grid.mode-wall .card-info { margin-top: 12px; }
+  .grid.mode-wall .card-info .t { font-size: 13.5px; }
+  .grid.mode-wall .x-au { font-size: 10px; letter-spacing: .1em; }
+  .grid.mode-wall .card-info .s { font-size: 10.5px; margin-top: 5px; }
+  .grid.mode-wall .x-sum { font-size: 11.5px; line-height: 1.65; margin-top: 8px; }
+  .grid.mode-wall .pin-badge { width: 22px; height: 22px; top: calc(var(--ledge) - var(--jh) + 5px); right: 5px; }
+  .grid.mode-wall .new-badge { font-size: 9px; padding: 2px 6px; top: calc(var(--ledge) - var(--jh) + 6px); left: 6px; }
+}
+
+/* Sort button and menu (same look as the display-mode menu) */
+.sub-acts { gap: .6em; }
+.sub-acts #btn-select { margin-left: .3em; }
+.sort-btn b { font-weight: 400; color: var(--accent); margin-left: .1em; }
+.mode-menu button b { margin-left: auto; padding-left: 1em; font-weight: 400; color: var(--accent); }
+.mode-menu .menu-note { margin: 4px 8px 4px; padding-top: 8px; border-top: 1px solid var(--line); font-size: .68em; color: var(--muted); letter-spacing: .04em; line-height: 1.6; max-width: 15em; }
+@media (max-width: 600px) {
+  /* on the phone the sort button shows its icon and arrow; the order's name is in its menu */
+  .sort-btn span { display: none; }
+  .sort-btn { padding-left: .55em; padding-right: .6em; }
+}
+
+/* Collect-bookmark sheet: the iPhone "open Folio with a shortcut" switch */
+.bm-open { margin: .6em 0 .2em; padding: .8em .9em; border-radius: 12px; background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.bm-switch { display: flex; align-items: center; gap: .6em; font-size: .9em; }
+.bm-switch input { width: 1.1em; height: 1.1em; accent-color: var(--accent); }
+.bm-open .sync-note { margin: .5em 0 0; }

@@ -14,6 +14,9 @@
 //   inbox gist  in-*.html       works sent from a site by the 收书 bookmark (collector.js);
 //               library.json    what the bookmark needs to spot new chapters: [{ w, c, t, done }]
 // Keeping book text in its own gist means the frequent index updates stay small.
+// The iPhone shortcut the 收书 panel can run after delivery (see showBookmarklet)
+const SHORTCUT_NAME = '打开 Folio';
+const IOS_DEVICE = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const Sync = {
   API: 'https://api.github.com',
   INDEX: 'Folio sync · index',
@@ -407,13 +410,17 @@ const Sync = {
     } else if (text !== shelf.gist) await this.patch(this.st.inbox, { 'library.json': { content: text } });
   },
 
+  // iPhone only: after delivery, offer to run the user's "打开 Folio" shortcut (this device's choice)
+  shortcutOn() { try { return localStorage.getItem('folio-collect-shortcut') === '1'; } catch { return false; } },
   // The bookmark: collector.js with this device's token and inbox filled in
   async bookmarklet() {
     await this.ensureInbox();
     const src = await (await fetch('collector.js', { cache: 'no-store' })).text();
     const code = src.split('\n').filter(l => !/^\s*\/\//.test(l)).map(l => l.trim()).filter(Boolean).join('\n')
       .replace('__TOKEN__', this.st.token).replace('__INBOX__', this.st.inbox || '')
-      .replace('__REPO__', this.st.repo || '').replace('__BRANCH__', this.st.branch || 'main');
+      .replace('__APP__', new URL('./', location.href).href)
+      .replace('__INSTALLED__', matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'yes' : '')
+      .replace('__SHORTCUT__', this.shortcutOn() ? SHORTCUT_NAME : '').replace('__REPO__', this.st.repo || '').replace('__BRANCH__', this.st.branch || 'main');
     return 'javascript:' + encodeURIComponent(code);
   },
 
@@ -428,8 +435,16 @@ const Sync = {
         <li><b>电脑 Chrome</b>：按 Ctrl+Shift+O 打开书签管理器 → 右上角 ⋮ →「添加新书签」，名字写「Folio 收书」，网址粘贴。</li>
         <li>以后在作品页点这个书签，作品会直接送到 Folio；在列表页（收藏、订阅、搜索结果）可以勾选多篇一起送，书架上有新章节的会自动勾上。</li>
       </ol>
+      ${IOS_DEVICE ? `<div class="bm-open"><label class="bm-switch"><input type="checkbox" data-a="sc"${this.shortcutOn() ? ' checked' : ''}><span>送完后显示「用快捷指令打开 Folio」</span></label>
+        <p class="sync-note">iPhone 的 Safari 不能直接打开主屏幕上的 Folio。如果想一点就切过去，可以先装一个快捷指令：打开「快捷指令」App → 右上角 ＋ → 添加操作「打开 App」→ 选择 Folio → 把快捷指令命名为「${SHORTCUT_NAME}」。<b>如果「打开 App」的列表里找不到 Folio，说明这台 iPhone 不支持，请关掉这个开关</b>；不开也没关系：送完后回到主屏幕的 Folio，新书会自己出现。改了开关要重新复制书签。</p></div>`
+        : `<p class="sync-note">在<b>已安装的 Folio 窗口</b>里复制书签，送完后的「打开 Folio」会直接打开 Folio 窗口（浏览器第一次可能会问是否允许）；在浏览器标签页里复制的书签，会用 Folio 的网址打开。</p>`}
       <p class="sync-note">书签里含有你的同步令牌，不要发给别人。换了令牌要重新复制一次。</p>
       <div class="pk-list"><button class="pk-row strong" data-a="copy"><span>复制书签</span></button></div>`);
+    s.card.onchange = async e => {
+      if (!e.target.matches('[data-a=sc]')) return;
+      try { localStorage.setItem('folio-collect-shortcut', e.target.checked ? '1' : '0'); } catch {}
+      url = await this.bookmarklet();
+    };
     s.card.onclick = async e => {
       if (!e.target.closest('[data-a=copy]')) return;
       await copyText(url);
