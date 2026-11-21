@@ -1101,3 +1101,7 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 .bm-switch { display: flex; align-items: center; gap: .6em; font-size: .9em; }
 .bm-switch input { width: 1.1em; height: 1.1em; accent-color: var(--accent); }
 .bm-open .sync-note { margin: .5em 0 0; }
+
+/* Temporary Web Push test (pushtest.js): the private key shown once */
+.push-key { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8em; word-break: break-all; user-select: all; -webkit-user-select: all;
+  padding: .7em .8em; border-radius: 10px; background: color-mix(in srgb, var(--fg) 6%, transparent); margin: .4em 0 .8em; }

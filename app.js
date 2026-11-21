@@ -522,6 +522,12 @@ document.getElementById('btn-turn').onclick = () => {
 // The marker is removed from the address so a reload does not repeat it.
 const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio/i;
 const fromCollect = FROM_COLLECT.test(location.href);
+// Temporary Web Push test (pushtest.js): opened from a notification (?from=push), or brought
+// forward by one (sw.js posts 'push-open'); recorded, then synced as on any launch
+const fromPush = /[?&]from=push/.test(location.href);
+if (fromPush) history.replaceState(null, '', location.pathname);
+if (fromPush) addEventListener('load', () => setTimeout(() => PushTest.arrived('url'), 300));
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') PushTest.arrived('focus'); });
 if (fromCollect) history.replaceState(null, '', location.pathname);
 async function collectNow() {
   if (!Sync.on) return;
