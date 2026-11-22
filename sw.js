@@ -3,7 +3,7 @@
 // Offline: serve from cache so the app and imported books still work.
 const CACHE = 'folio-1.3.3';
 const FILES = [
-  './', 'index.html', 'style.css', 'app.js', 'desktop.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'backup.js', 'library.js', 'sync.js', 'cloud.js', 'repo.js', 'migrate.js', 'importer.js', 'formats.js', 'links.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js', 'pushtest.js',
+  './', 'index.html', 'style.css', 'app.js', 'desktop.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'backup.js', 'library.js', 'sync.js', 'cloud.js', 'repo.js', 'migrate.js', 'importer.js', 'formats.js', 'links.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js', 'push.js',
   'fonts/NotoSerifSC-Regular.woff', 'fonts/NotoSerifSC-Medium.woff', 'fonts/sans/sans.css', 'fonts/sans/folio-quotes.woff2', 'fonts/inter-latin-wght-normal.woff2',
   // The Chinese pieces of Folio Sans (fonts/sans/*.woff2) are cached as they are first shown, not up front:
   // devices with PingFang never need them
@@ -38,7 +38,7 @@ self.addEventListener('fetch', e => {
   })());
 });
 
-// ---- Temporary Web Push test (pushtest.js, push-test/folio-push-test.yml) ----
+// ---- 收书 notifications (push.js; sent by .github/workflows/folio-push.yml in the data repository) ----
 // Messages are Declarative Web Push JSON ({ web_push: 8030, notification: { title, body, navigate } }):
 // iOS 18.4+ shows them by itself; for other systems, or when this worker handles the event, the
 // same notification is shown here. Every push shows a notification, as iOS requires.
@@ -46,7 +46,7 @@ self.addEventListener('push', e => {
   let n = {};
   try { n = e.data?.json()?.notification || {}; } catch {}
   e.waitUntil(self.registration.showNotification(n.title || 'Folio', {
-    body: n.body || '', tag: 'folio-push-test', icon: 'icon-192.png', data: { url: n.navigate || './?from=push' },
+    body: n.body || '', tag: 'folio-collected', icon: 'icon-192.png', data: { url: n.navigate || './?from=push' },
   }));
 });
 // A tap: bring an open Folio window forward (and tell it), or open Folio

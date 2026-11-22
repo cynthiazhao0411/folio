@@ -516,7 +516,7 @@ const Sync = {
         <button class="pk-row" data-a="now"><span>立即同步</span></button>
         <button class="pk-row" data-a="cloud"><span>云端自动备份</span><small>${esc(CloudBackup.summary())}</small></button>
         <button class="pk-row" data-a="bm"><span>网页收书书签</span><small>在网站上一点就进书架</small></button>
-        ${this.repoMode ? '<button class="pk-row" data-a="push"><span>通知测试（临时）</span><small>验证 iPhone 能否收到推送</small></button>' : ''}
+        ${this.repoMode && Push.supported() ? '<button class="pk-row" data-a="push"><span>收书通知</span><small>网页收书完成后收到一条通知</small></button>' : ''}
         <button class="pk-row" data-a="name"><span>本机名称</span><small>${esc(this.st.device)}</small></button>
         ${this.st.legacy ? '<button class="pk-row" data-a="legacy"><span>旧 Gist</span><small>还保留着，可以停用</small></button>' : ''}
         <button class="pk-row muted" data-a="off"><span>断开同步</span></button>
@@ -541,7 +541,7 @@ const Sync = {
       } else if (a === 'bm') {
         this.showBookmarklet();
       } else if (a === 'push') {
-        PushTest.open();
+        Push.open();
       } else if (a === 'name') {
         const v = await promptDialog({ title: '本机名称', value: this.st.device, placeholder: '比如：手机、电脑', ok: '保存' });
         if (v) { this.st.device = v; this.save(); }

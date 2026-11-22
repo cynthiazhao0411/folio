@@ -520,14 +520,10 @@ document.getElementById('btn-turn').onclick = () => {
 // arrives as ?open=...). Either way, collect the inbox now and show the shelf. When Folio is already
 // open, launch_handler focus-existing brings that window forward and the launch arrives in launchQueue.
 // The marker is removed from the address so a reload does not repeat it.
-const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio/i;
+// A tapped 收书 notification (push.js) arrives the same way: ?from=push when it opens Folio, or a
+// 'push-open' message from sw.js when it brings an open Folio forward.
+const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio|[?&]from=push/i;
 const fromCollect = FROM_COLLECT.test(location.href);
-// Temporary Web Push test (pushtest.js): opened from a notification (?from=push), or brought
-// forward by one (sw.js posts 'push-open'); recorded, then synced as on any launch
-const fromPush = /[?&]from=push/.test(location.href);
-if (fromPush) history.replaceState(null, '', location.pathname);
-if (fromPush) addEventListener('load', () => setTimeout(() => PushTest.arrived('url'), 300));
-navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') PushTest.arrived('focus'); });
 if (fromCollect) history.replaceState(null, '', location.pathname);
 async function collectNow() {
   if (!Sync.on) return;
@@ -537,6 +533,7 @@ async function collectNow() {
 }
 if (fromCollect) addEventListener('load', () => setTimeout(collectNow, 300));
 if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(); });
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') collectNow(); });
 
 function toast(msg) {
   const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: msg });

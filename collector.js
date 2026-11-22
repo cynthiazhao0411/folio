@@ -249,6 +249,22 @@
     }
     return shelf;
   }
+  // One notification per batch (push.js / folio-push.yml): once every work of the batch has been
+  // handled and each delivery is already committed to the repository, tell the repository how many
+  // were written and how many failed. Only when a device has turned notifications on (the file
+  // push/subscription.json exists) and at least one work arrived. Uses the same token (Contents:
+  // read and write); any problem here is ignored, so collecting never depends on it.
+  async function notifyBatch(ok, failed, titles) {
+    if (!CFG.repo || !ok || blocked) return;
+    try {
+      const t = new AbortController(); setTimeout(() => t.abort(), 6000);
+      const has = await send(API + `/contents/push/subscription.json?ref=${CFG.branch}`, { cache: 'no-store', signal: t.signal,
+        headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' } });
+      if (!has.ok) return;
+      await send(API + '/dispatches', { method: 'POST', signal: t.signal, headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' },
+        body: JSON.stringify({ event_type: 'folio-collected', client_payload: { ok, failed, titles: titles.slice(0, 3), at: Date.now() } }) });
+    } catch { /* no notification this time; the works are in the inbox all the same */ }
+  }
   function finish(n, extra = '') {
     progress(0, 0);
     if (held.length) {
@@ -274,6 +290,7 @@
     buttons([]);
     const total = job.ids.length;
     let sent = 0;
+    const arrived = [];
     for (const id of job.ids) {
       if (job.done.includes(id)) continue;
       const n = job.done.length + Object.keys(job.failed).length + 1;
@@ -286,7 +303,7 @@
       try {
         const work = await fetchWork(id);
         say(`正在抓取 ${Math.min(n, total)} / ${total}` + hint, shortTitle(work.title));
-        if (await deliver(work)) { job.done.push(id); sent++; }
+        if (await deliver(work)) { job.done.push(id); sent++; arrived.push(shortTitle(work.title)); }
         delete job.failed[id];
       } catch (e) {
         job.failed[id] = e.message;
@@ -298,6 +315,9 @@
     const failed = Object.keys(job.failed);
     if (!held.length) saveJob(failed.length ? { ...job, ids: failed, done: [], failed: job.failed } : null);
     const already = total - sent - failed.length - held.length;
+    // This batch: every work now in the inbox (also those an interrupted earlier run delivered), and
+    // every work that did not get there (could not be fetched, or held because GitHub was unreachable)
+    await notifyBatch(job.done.length, failed.length + held.length, arrived);
     finish(sent, (already > 0 ? `\n（其中 ${already} 篇之前已经送过）` : '')
       + (failed.length ? `\n${failed.length} 篇失败：${job.failed[failed[0]]}。再点一次书签可以重试。` : ''));
   }
@@ -464,7 +484,7 @@
     keepAwake(true);
     const meta = { ...info, cover: await coverData(info.cover) };
     let sent = 0;
-    const errors = [];
+    const errors = [], names = [];
     for (const [i, f] of files.entries()) {
       say(`正在下载 ${i + 1} / ${files.length}：${title}（${f.ext.toUpperCase()}）…`);
       progress(i, files.length);
@@ -478,12 +498,13 @@
         let h = 0x811c9dc5;
         for (const c of f.url) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193); }
         const name = (title || 'book').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60) + '.' + f.ext;
-        if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, meta, b64: btoa(bin) })) sent++;
+        if (await deliver({ id: 'f' + (h >>> 0).toString(36), ext: f.ext, name, meta, b64: btoa(bin) })) { sent++; names.push(name.replace(/\.\w+$/, '')); }
       } catch (e) {
         errors.push(e?.name === 'TypeError' ? '这个网站不允许页面下载这个文件（下载地址在别的网站上），请手动下载后导入' : e.message);
       }
     }
     keepAwake(false);
+    await notifyBatch(sent, errors.length + held.length, names);
     finish(sent, errors.length ? `\n${errors.length} 个失败：${errors[0]}` : '');
   }
 })().catch(e => alert('Folio 收书出错：' + e.message));
