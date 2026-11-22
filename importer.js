@@ -6,7 +6,7 @@
 //   1. Structured HTML exports (a #preface metadata block plus #chapters)
 //   2. Plain HTML (chapters split on <h1>/<h2>/<h3> headings)
 //   3. Plain text (chapter headings detected by pattern; UTF-8 / GBK auto-detected)
-//   4. A saved full-work web page (from the share-sheet shortcut), see parseWorkPage
+//   4. A saved full-work web page, see parseWorkPage
 //   5. EPUB, PDF, and ZIP files holding any of these (formats.js)
 
 const Importer = {
@@ -113,8 +113,8 @@ function parseHtml(html, fallbackTitle) {
   return parsePlainHtml(doc, fallbackTitle);
 }
 
-// A full-work web page, as saved by the share-sheet shortcut (which also adds
-// <meta name="folio-source">). Same information as the structured export, laid out differently:
+// A full-work web page, as saved from the browser (it may carry <meta name="folio-source">).
+// Same information as the structured export, laid out differently:
 //   .preface h2.title, h3.byline a[rel=author], .summary blockquote
 //   dl.work.meta: <dt class="relationship">Relationships:</dt><dd>…links…</dd>, and a nested
 //                 dl.stats for Published / Completed / Words / Chapters

@@ -1096,11 +1096,11 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
   .sort-btn { padding-left: .55em; padding-right: .6em; }
 }
 
-/* Collect-bookmark sheet: the iPhone "open Folio with a shortcut" switch */
-.bm-open { margin: .6em 0 .2em; padding: .8em .9em; border-radius: 12px; background: color-mix(in srgb, var(--fg) 4%, transparent); }
-.bm-switch { display: flex; align-items: center; gap: .6em; font-size: .9em; }
-.bm-switch input { width: 1.1em; height: 1.1em; accent-color: var(--accent); }
-.bm-open .sync-note { margin: .5em 0 0; }
+/* Collect-bookmark sheet: copy button first, two short steps, one note */
+.bm-add { margin: .9em 1.2em .2em 2.4em; font-size: .84em; line-height: 1.6; }
+.bm-add li { margin-bottom: .25em; }
+.bm-note { margin: .5em 1em .2em; font-size: .74em; }
+.pk-row.done { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 
 /* 收书通知 (push.js): the private key, shown once when notifications are turned on */
 .push-key { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8em; word-break: break-all; user-select: all; -webkit-user-select: all;

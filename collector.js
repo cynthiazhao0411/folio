@@ -19,7 +19,7 @@
 // (iOS does this to background tabs), tapping the bookmark again offers to continue with
 // only the works that are left. The screen is kept awake while a batch runs.
 (async () => {
-  const CFG = { token: '__TOKEN__', inbox: '__INBOX__', repo: '__REPO__', branch: '__BRANCH__', app: '__APP__', installed: '__INSTALLED__', shortcut: '__SHORTCUT__' };
+  const CFG = { token: '__TOKEN__', inbox: '__INBOX__', repo: '__REPO__', branch: '__BRANCH__', app: '__APP__', installed: '__INSTALLED__' };
   const API = CFG.repo ? 'https://api.github.com/repos/' + CFG.repo : 'https://api.github.com/gists/' + CFG.inbox;
   // The browser's own fetch, taken from a fresh frame, so a site script that replaced window.fetch
   // does not get to see the token (this narrows the risk; it cannot rule out a hostile page)
@@ -110,15 +110,13 @@
   //    the installed app when there is one (navigation capturing); otherwise in a tab of the same
   //    browser, with the same books.
   //  • iPhone: Safari cannot open a home-screen web app, and Folio in a Safari tab keeps a separate,
-  //    empty shelf. If the user set up the Shortcuts route, a shortcuts:// link runs their "打开 Folio"
-  //    shortcut (iOS asks first); otherwise the panel says to go back to Folio, which collects the new
-  //    works by itself as soon as it comes to the front.
+  //    empty shelf, so the panel says to go back to Folio, which collects the new works by itself as
+  //    soon as it comes to the front (and a 收书 notification, if turned on, opens it with one tap).
   // The marker (#from=collect / ?open=) makes Folio collect the inbox at once.
   const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const APP = /^https?:\/\//.test(CFG.app) ? CFG.app : '';
-  const SHORTCUT = CFG.shortcut && !CFG.shortcut.startsWith('__') ? CFG.shortcut : '';
   const openButtons = () => {
-    if (IOS) return SHORTCUT ? [['用快捷指令打开 Folio', 'shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT), true], ['好', () => window.__folio.close()]] : null;
+    if (IOS) return null;
     if (!APP) return null;
     const web = APP + '#from=collect';
     return CFG.installed === 'yes' ? [['打开 Folio', 'web+folio://collect', true], ['在浏览器打开', web]] : [['打开 Folio', web, true], ['好', () => window.__folio.close()]];

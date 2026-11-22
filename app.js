@@ -283,7 +283,7 @@ Reader.onProgress = p => {
 };
 
 // ================= Import =================
-// From files (the 导入 button) or from the clipboard (see the share-sheet shortcut in the README)
+// From files (the 导入 button) or from the clipboard (粘贴导入)
 const MIN_TEXT = 20;                                       // fewer characters than this is "no text", not a book
 const importError = err => /quota/i.test(err?.name + ' ' + err?.message) ? '存储空间不足' : (err?.message || '未知错误');
 const bookText = chapters => chapters.reduce((n, c) => n + c.html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s/g, '').length, 0);
@@ -468,13 +468,6 @@ async function importFromClipboard() {
     progress.done();
     dialog({ title: '导入出错', message: importError(err), ok: '好' });
   }
-}
-// Opening the app with #paste (from the shortcut) shows a one-tap paste prompt;
-// browsers only let a page read the clipboard right after a tap.
-if (location.hash === '#paste') {
-  history.replaceState(null, '', location.pathname);
-  setTimeout(() => confirmDialog({ title: '导入刚复制的作品？', message: '从剪贴板读取并加入书架', ok: '粘贴导入' })
-    .then(ok => ok && importFromClipboard()), 400);
 }
 
 // ================= Reader menu =================
