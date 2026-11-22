@@ -27,7 +27,7 @@ jobs:
           // Sends one 收书 notification to the device in push/subscription.json (run by folio-push.yml).
           // Built-in Node modules only: VAPID (RFC 8292) signs the request, the payload is encrypted with
           // aes128gcm (RFC 8291). The private key comes from the environment (an Actions secret), never a
-          // file, and is never printed. EVENT is the dispatch's client_payload: { ok, failed, titles }.
+          // file, and is never printed. EVENT is the dispatch's client_payload: { ok, failed, titles, last }.
           import { readFileSync, existsSync } from 'node:fs';
           import crypto from 'node:crypto';
 
@@ -52,7 +52,13 @@ jobs:
             : failed
               ? { title: `收书完成：成功 ${ok} 本，失败 ${failed} 本`, body: `${names ? `已加入：${names}。` : ''}失败的作品，再点一次收书书签可以重试。` }
               : { title: '新书已加入 Folio', body: `${ok} 本${names ? `：${names}` : ''}。点开就能看到。` };
-          const payload = { web_push: 8030, notification: { ...notification, navigate: new URL('./?from=push', sub.app).href, silent: false } };
+          // Tapping it opens Folio on the last work that arrived (Folio falls back to the shelf if it cannot find it)
+          const last = ev.last && typeof ev.last === 'object' ? ev.last : null;
+          const lastId = String(last?.id || '').replace(/[^\w-]/g, '').slice(0, 40);
+          const open = new URL('./', sub.app);
+          open.searchParams.set('from', 'push');
+          if (!manual && lastId) { open.searchParams.set('book', lastId); if (last.title) open.searchParams.set('t', String(last.title).slice(0, 80)); }
+          const payload = { web_push: 8030, notification: { ...notification, navigate: open.href, silent: false } };
 
           // The VAPID key: checked before use, with messages that never show the key itself
           const d = (process.env.VAPID_PRIVATE_KEY || '').trim();

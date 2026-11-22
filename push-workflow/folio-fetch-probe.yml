@@ -1,0 +1,46 @@
+# Folio: can GitHub's servers fetch a work page? (feasibility probe for background collecting)
+# Copy into the PRIVATE data repository as .github/workflows/folio-fetch-probe.yml, then in the
+# Actions tab choose "Folio fetch probe" → Run workflow and paste the address of one PUBLIC work
+# (no login needed). It requests that page three times, a few seconds apart, and prints only status
+# lines (HTTP status, whether a challenge page came back, whether the chapters were there); it saves
+# nothing and needs no secrets. Runs only by hand.
+name: Folio fetch probe
+on:
+  workflow_dispatch:
+    inputs:
+      work_url:
+        description: Address of one public work page
+        required: true
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fetch the work page
+        env:
+          WORK_URL: ${{ inputs.work_url }}
+        run: |
+          cat > probe.mjs <<'SCRIPT'
+          const u = new URL(process.env.WORK_URL.trim());
+          const m = u.pathname.match(/\/works\/(\d+)/);
+          if (!m) { console.log('Not a work address'); process.exit(1); }
+          const url = `${u.origin}/works/${m[1]}?view_adult=true&view_full_work=true`;
+          for (let i = 1; i <= 3; i++) {
+            const t = Date.now();
+            let line;
+            try {
+              const r = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'Folio personal reader (GitHub Actions probe)', Accept: 'text/html' } });
+              const html = await r.text();
+              const challenge = /cf-mitigated/i.test([...r.headers.keys()].join(' ')) || /Just a moment|challenge-platform|cf_chl/i.test(html);
+              line = `#${i} HTTP ${r.status} · server ${r.headers.get('server') || '?'} · cf-mitigated ${r.headers.get('cf-mitigated') || '-'}`
+                + ` · challenge page ${challenge ? 'YES' : 'no'} · chapters ${/id="chapters"/.test(html) ? 'YES' : 'no'}`
+                + ` · login wall ${/users\/login|This work is only available to registered users/i.test(html) ? 'YES' : 'no'}`
+                + ` · retry-later ${/Retry later/i.test(html) || r.status === 429 ? 'YES' : 'no'} · ${html.length} bytes · ${Date.now() - t} ms`;
+            } catch (e) { line = `#${i} request failed: ${e.message}`; }
+            console.log(line);
+            await new Promise(r => setTimeout(r, 4000));
+          }
+          SCRIPT
+          node probe.mjs

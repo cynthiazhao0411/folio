@@ -59,7 +59,8 @@ let current = null, saveTimer = null;
 
 // The shelf stays rendered underneath the reader, so its scroll position survives.
 let animating = false;
-async function openBook(id, fromCover) {
+// atCover: open on the book's first page, the cover (a newly collected book from a notification)
+async function openBook(id, fromCover, atCover) {
   if (animating) return;
   animating = true;
   const reader = document.getElementById('reader');
@@ -72,7 +73,7 @@ async function openBook(id, fromCover) {
     DB.putMeta(meta);
     Reader.setAnnots(await DB.notesFor(id));                  // bookmarks, highlights, notes
     reader.style.opacity = '0';                                // lay out invisibly first
-    Reader.open({ ...meta, chapters: content.chapters }, meta.progress);
+    Reader.open({ ...meta, chapters: content.chapters }, atCover ? null : meta.progress);
     if (!meta.words) { meta.words = Reader.wordCount; DB.putMeta(meta); }   // books imported before word counts existed
     if (meta.est?.chapters?.length !== content.chapters.length || meta.est?.speed !== READ_SPEED) { meta.est = estimateBook(content.chapters); DB.putMeta(meta); }
     if (meta.t2s === undefined) { meta.t2s = Reader.t2s; DB.putMeta(meta); }  // remember the script detection
@@ -515,18 +516,46 @@ document.getElementById('btn-turn').onclick = () => {
 // The marker is removed from the address so a reload does not repeat it.
 // A tapped 收书 notification (push.js) arrives the same way: ?from=push when it opens Folio, or a
 // 'push-open' message from sw.js when it brings an open Folio forward.
+// Each of these may name the last work the batch delivered (book=<work id>, t=<title>): once the inbox
+// is collected, that book opens in the reader on its first page, the cover. Without it, or when the
+// book is not on the shelf, Folio just shows the shelf.
 const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio|[?&]from=push/i;
-const fromCollect = FROM_COLLECT.test(location.href);
+function arrivalBook(href) {
+  try {
+    const u = new URL(href, location.href), hash = new URLSearchParams(u.hash.slice(1));
+    let q = u.searchParams.get('book') ? u.searchParams : hash.get('book') ? hash : null;
+    const open = u.searchParams.get('open');               // web+folio://collect?book=… handed over by the system
+    if (!q && open) q = new URL(open.replace(/^web\+folio:\/\//i, 'https://folio.invalid/')).searchParams;
+    const id = (q?.get('book') || '').replace(/[^\w-]/g, '').slice(0, 40);
+    return id ? { id, title: (q.get('t') || '').slice(0, 80) } : null;
+  } catch { return null; }
+}
+const fromCollect = FROM_COLLECT.test(location.href), arrivedBook = fromCollect ? arrivalBook(location.href) : null;
 if (fromCollect) history.replaceState(null, '', location.pathname);
-async function collectNow() {
+async function collectNow(target) {
   if (!Sync.on) return;
   await Sync.check(true);
   if (Sync.reading()) return;                              // never under an open book; the shelf redraws on close
   await Library.render();
+  if (target) await showArrived(target);
 }
-if (fromCollect) addEventListener('load', () => setTimeout(collectNow, 300));
-if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(); });
-navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') collectNow(); });
+// The book a batch ended with: a collected work is found by its source (…/works/<id>), an e-book
+// file sent from a page by its title (the newest such book)
+async function showArrived({ id, title }) {
+  const all = await DB.allMeta();
+  const b = /^\d+$/.test(id) ? all.find(m => (m.source || '').match(/\/works\/(\d+)/)?.[1] === id)
+    : title ? all.filter(m => m.title === title || bookName(m.title) === title).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
+  if (!b || b.hidden) return;
+  if (Library.filter !== 'all') { Library.filter = 'all'; await Library.render(); }
+  const card = document.querySelector(`.card[data-id="${CSS.escape(b.id)}"]`);
+  if (!card) return;
+  card.scrollIntoView({ block: 'center' });
+  await new Promise(r => setTimeout(r, 250));
+  openBook(b.id, card.querySelector('.cover'), true);
+}
+if (fromCollect) addEventListener('load', () => setTimeout(() => collectNow(arrivedBook), 300));
+if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(arrivalBook(p.targetURL)); });
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') collectNow(arrivalBook(e.data.url || '')); });
 
 function toast(msg) {
   const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: msg });

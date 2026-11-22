@@ -56,7 +56,7 @@ self.addEventListener('notificationclick', e => {
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const w = wins.find(c => c.url.startsWith(self.registration.scope));
-    if (w) { await w.focus().catch(() => {}); w.postMessage({ type: 'push-open' }); return; }
+    if (w) { await w.focus().catch(() => {}); w.postMessage({ type: 'push-open', url }); return; }
     await self.clients.openWindow(url);
   })());
 });
