@@ -531,13 +531,35 @@ function arrivalBook(href) {
   } catch { return null; }
 }
 const fromCollect = FROM_COLLECT.test(location.href), arrivedBook = fromCollect ? arrivalBook(location.href) : null;
+const launchedByPush = /[?&]from=push/.test(location.search);
 if (fromCollect) history.replaceState(null, '', location.pathname);
-async function collectNow(target) {
+// While it works a line says so ("正在收取新书…"), so the wait after a tap is visible
+async function collectNow(target, fromPush) {
   if (!Sync.on) return;
-  await Sync.check(true);
-  if (Sync.reading()) return;                              // never under an open book; the shelf redraws on close
-  await Library.render();
-  if (target) await showArrived(target);
+  const note = fromPush || target ? progressToast() : null;
+  note?.set(target?.title ? `正在收取《${bookName(target.title)}》…` : '正在收取新书…');
+  try {
+    await Sync.check(true);
+    if (Sync.reading()) return;                            // never under an open book; the shelf redraws on close
+    await Library.render();
+    if (target && !(await showArrived(target))) toast(`书架上没找到${target.title ? `《${bookName(target.title)}》` : '这本书'}`);
+  } finally { note?.done(); }
+}
+// The note sw.js leaves when a notification is tapped (see there); used once, and only if fresh
+async function takePendingOpen() {
+  try {
+    const c = await caches.open('folio-open'), r = await c.match('pending');
+    if (!r) return null;
+    await c.delete('pending');
+    const p = await r.json();
+    return Date.now() - p.at < 10 * 60e3 ? p.url : null;
+  } catch { return null; }
+}
+let arriving = false;
+async function arriveFrom(url) {
+  if (arriving) return;
+  arriving = true;
+  try { await collectNow(arrivalBook(url), true); } finally { arriving = false; }
 }
 // The book a batch ended with: a collected work is found by its source (…/works/<id>), an e-book
 // file sent from a page by its title (the newest such book)
@@ -545,17 +567,33 @@ async function showArrived({ id, title }) {
   const all = await DB.allMeta();
   const b = /^\d+$/.test(id) ? all.find(m => (m.source || '').match(/\/works\/(\d+)/)?.[1] === id)
     : title ? all.filter(m => m.title === title || bookName(m.title) === title).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
-  if (!b || b.hidden) return;
+  if (!b || b.hidden) return false;
   if (Library.filter !== 'all') { Library.filter = 'all'; await Library.render(); }
   const card = document.querySelector(`.card[data-id="${CSS.escape(b.id)}"]`);
-  if (!card) return;
+  if (!card) return false;
   card.scrollIntoView({ block: 'center' });
   await new Promise(r => setTimeout(r, 250));
   openBook(b.id, card.querySelector('.cover'), true);
+  return true;
 }
-if (fromCollect) addEventListener('load', () => setTimeout(() => collectNow(arrivedBook), 300));
+// Launch: the address itself, or else the note a tapped notification left. Coming to the front or a
+// message from sw.js: the note (removed, so one tap opens the book once).
+addEventListener('load', () => setTimeout(async () => {
+  const pending = await takePendingOpen();
+  if (fromCollect) collectNow(arrivedBook, launchedByPush || !!pending);
+  else if (pending) arriveFrom(pending);
+}, 300));
 if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(arrivalBook(p.targetURL)); });
-navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'push-open') collectNow(arrivalBook(e.data.url || '')); });
+navigator.serviceWorker?.addEventListener('message', async e => {
+  if (e.data?.type !== 'push-open') return;
+  await takePendingOpen();
+  arriveFrom(e.data.url || '');
+});
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden) return;
+  const pending = await takePendingOpen();
+  if (pending) arriveFrom(pending);
+});
 
 function toast(msg) {
   const t = Object.assign(document.createElement('div'), { className: 'toast', textContent: msg });

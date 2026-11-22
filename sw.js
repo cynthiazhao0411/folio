@@ -16,7 +16,7 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== 'folio-open').map(k => caches.delete(k)))));
   self.clients.claim();
 });
 
@@ -49,11 +49,15 @@ self.addEventListener('push', e => {
     body: n.body || '', tag: 'folio-collected', icon: 'icon-192.png', data: { url: n.navigate || './?from=push' },
   }));
 });
-// A tap: bring an open Folio window forward (and tell it), or open Folio
+// A tap: bring an open Folio window forward (and tell it), or open Folio. The address the
+// notification points to (which book to open) is also left in the small cache 'folio-open', because
+// iOS may start the app on its start page and drop the address that openWindow was given; Folio
+// reads and removes that note when it starts or comes to the front (app.js, takePendingOpen).
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const url = new URL(e.notification.data?.url || './?from=push', self.registration.scope).href;
   e.waitUntil((async () => {
+    try { await (await caches.open('folio-open')).put('pending', new Response(JSON.stringify({ url, at: Date.now() }))); } catch {}
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const w = wins.find(c => c.url.startsWith(self.registration.scope));
     if (w) { await w.focus().catch(() => {}); w.postMessage({ type: 'push-open', url }); return; }
