@@ -806,7 +806,16 @@ async function cleanTitles() {
     if (changed.length) { await DB.putMany('meta', changed); DB.onWrite?.('meta'); }
   } catch (e) { console.warn('titles:', e); }
 }
-cleanTitles().finally(renderShelf);
+cleanTitles().finally(async () => {
+  await renderShelf();
+  // Arriving from a shelf switch: show the page only once the new shelf is in place
+  const root = document.documentElement;
+  if (root.classList.contains('switching')) {
+    try { sessionStorage.removeItem('folio-switch'); } catch {}
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('shown')));
+    setTimeout(() => { root.classList.remove('switching', 'shown'); root.style.background = ''; }, 500);
+  }
+});
 Sync.init();
 CloudBackup.init();
 
@@ -825,7 +834,12 @@ document.querySelector('.app-version').onclick = async () => {
   } else {
     try { localStorage.setItem('folio-shelf', 'demo'); } catch {}
   }
-  location.reload();
+  // Fade out, reload on the other shelf, fade in there (no blank flash between the two)
+  const bg = getComputedStyle(document.body).backgroundColor;      // the page colour stays under the fade
+  document.documentElement.style.background = bg;
+  try { sessionStorage.setItem('folio-switch', bg); } catch {}
+  document.body.classList.add('leaving');
+  setTimeout(() => location.reload(), 230);
 };
 
 // Without device sync, the data lives only on this device: a gentle weekly reminder to back up
