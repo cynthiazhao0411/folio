@@ -16,14 +16,27 @@
 // the existing records into `snapshots`, inside the same transaction, so a failed or
 // faulty migration can always be undone.
 // Every store except contents is synced as one snapshot; contents are synced per book.
+// Second shelf for showing Folio to others: its own database (books, reading records, ratings,
+// statistics), never synced, backed up or fed by the inbox. Switched from the version label.
+const DEMO = (() => { try { return localStorage.getItem('folio-shelf') === 'demo'; } catch { return false; } })();
+
 const DB = {
   _db: null,
   onWrite: null,          // set by sync.js: called with (storeName) after every successful write
 
+  // Runs fn against the own shelf's database even on the demo shelf (the manual backup is always the own shelf)
+  async onMain(fn) {
+    if (!DEMO) return fn();
+    const keep = this._db;
+    this._db = null; this.main = true;
+    try { return await fn(); }
+    finally { this._db?.close(); this._db = keep; this.main = false; }
+  },
+
   open() {
     if (this._db) return Promise.resolve(this._db);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('folio', 6);
+      const req = indexedDB.open(DEMO && !this.main ? 'folio-demo' : 'folio', 6);
       req.onupgradeneeded = e => {            // runs on first launch and when the version number goes up
         const db = req.result, tx = req.transaction, has = n => db.objectStoreNames.contains(n);
         const old = e.oldVersion;

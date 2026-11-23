@@ -14,6 +14,8 @@
 //   inbox gist  in-*.html       works sent from a site by the 收书 bookmark (collector.js);
 //               library.json    what the bookmark needs to spot new chapters: [{ w, c, t, done }]
 // Keeping book text in its own gist means the frequent index updates stay small.
+const SYNC_DIR = DEMO ? 'demo-sync' : 'sync';
+
 const Sync = {
   API: 'https://api.github.com',
   INDEX: 'Folio sync · index',
@@ -28,10 +30,16 @@ const Sync = {
   timer: 0,
 
   // ---------- state ----------
-  load() { try { this.st = JSON.parse(localStorage.getItem('folio-sync')) || {}; } catch { this.st = {}; } },
-  save() { localStorage.setItem('folio-sync', JSON.stringify(this.st)); },
+  // The demo shelf syncs into its own folder (demo-sync/) with its own state; the account (token,
+  // repository, branch, device name) is always the own shelf's
+  load() {
+    const read = k => { try { return JSON.parse(localStorage.getItem(k)) || {}; } catch { return {}; } };
+    const main = read('folio-sync');
+    this.st = DEMO ? { ...read('folio-sync-demo'), token: main.token, repo: main.repo, branch: main.branch, device: main.device } : main;
+  },
+  save() { localStorage.setItem(DEMO ? 'folio-sync-demo' : 'folio-sync', JSON.stringify(this.st)); },
   get repoMode() { return !!this.st.repo; },
-  get on() { return !!(this.st.token && (this.st.repo || (this.st.index && this.st.books))); },
+  get on() { return (!DEMO || !!this.st.repo) && !!(this.st.token && (this.st.repo || (this.st.index && this.st.books))); },
   useRepo() { Repo.use({ token: this.st.token, repo: this.st.repo, branch: this.st.branch }); },
   remote: null,               // the last sync manifest read from the repository
 
@@ -88,7 +96,7 @@ const Sync = {
   },
   async readIndex() {
     if (this.repoMode) {
-      const m = await Repo.manifest('sync');
+      const m = await Repo.manifest(SYNC_DIR);
       this.remote = m && m.app === 'folio-repo' && m.kind === 'sync' ? m : null;
       return this.remote;
     }
@@ -145,7 +153,7 @@ const Sync = {
         await this.push(remote);
       }
       if (!this.reading()) {
-        await this.collectInbox();
+        if (!DEMO) await this.collectInbox();
         if (this.repoMode && this.st.legacy?.inbox && this.st.legacy.token) await this.collectInbox(true);
       }
       this.st.error = null;
@@ -261,8 +269,8 @@ const Sync = {
     Object.assign(snap.manifest, { kind: 'sync', updatedAt, device: this.st.device });
     // Written only if sync/ is still what this device last saw; otherwise the other device wins
     const base = remote?.updatedAt ?? null;
-    await Repo.save('sync', snap, `sync: ${this.st.device}`, async head => {
-      const m = await Repo.manifest('sync', head.commit);
+    await Repo.save(SYNC_DIR, snap, `sync: ${this.st.device}`, async head => {
+      const m = await Repo.manifest(SYNC_DIR, head.commit);
       if ((m?.updatedAt ?? null) !== base) throw Object.assign(new Error('另一台设备刚刚同步过'), { changed: true });
     });
     this.remote = snap.manifest;

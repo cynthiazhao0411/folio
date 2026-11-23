@@ -636,7 +636,6 @@ body.theme-night .sheet-item.danger { color: #ff8a7a; }
 }
 .chips button svg { width: 15px; height: 15px; }
 .chips button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.chips .back-hidden { background: var(--accent) !important; border-color: var(--accent) !important; }
 .card-cover { position: relative; }
 .pin-badge {
   position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%;
@@ -779,6 +778,7 @@ body.theme-night .bc-delete { color: #e0806b; }
 .alert-actions button { flex: 1; border: none; border-radius: 10px; font-size: .95em; padding: .75em 0; background: color-mix(in srgb, var(--line) 70%, transparent); color: var(--fg); }
 .alert-actions .strong { background: var(--fg); color: var(--bg); font-weight: 600; }
 .alert-actions .danger { background: #b5432f; color: #fff; font-weight: 600; }
+.alert-actions .faint { background: transparent; color: var(--muted); font-size: .85em; }
 .alert-actions button:active { opacity: .7; }
 
 /* Rating distribution */
@@ -811,7 +811,7 @@ body.theme-night .bc-delete { color: #e0806b; }
 .rp-later { background: none; border: none; color: var(--muted); font-size: .8em; padding: .8em 1em .4em; letter-spacing: .1em; }
 .bc-rate-hint { font-size: .7em; color: var(--accent); margin-top: .3em; letter-spacing: .05em; }
 
-.app-version { text-align: center; font-size: .7em; color: var(--muted); letter-spacing: .15em; padding-top: .4em; font-family: var(--font); }
+.app-version { -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; cursor: default; outline: none; text-align: center; font-size: .7em; color: var(--muted); letter-spacing: .15em; padding-top: .4em; font-family: var(--font); }
 
 /* Device sync panel */
 .sync-note { color: var(--muted); font-size: .78em; text-align: center; margin: -.4em 1.4em .8em; line-height: 1.6; }

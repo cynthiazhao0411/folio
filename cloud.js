@@ -39,6 +39,7 @@ const CloudBackup = {
 
   init() {
     this.load();
+    if (DEMO) return;
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.st.dirty) this.run(); });
     addEventListener('online', () => { if (this.st.dirty) this.run(); });
     // Opened with changes that were never backed up (or never backed up at all): catch up
@@ -47,6 +48,7 @@ const CloudBackup = {
 
   // Called after every data change (from Sync.touched)
   mark() {
+    if (DEMO) return;                                  // the demo shelf is never in the cloud backup
     this.st.dirty = true;
     this.st.rev = (this.st.rev || 0) + 1;
     this.save();

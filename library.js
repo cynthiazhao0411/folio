@@ -3,7 +3,7 @@
 //
 // Per-book fields managed here (all on the book's meta record):
 //   pinned (timestamp) · folder (name) · userTags [] · rating 0–5 · status 'unread'|'reading'|'done'
-//   hidden (bool) · renamed (bool, so a re-import keeps the custom title)
+//   hidden (bool, no longer used: every book shows on the shelf) · renamed (bool, so a re-import keeps the custom title)
 
 // ================= Jackets =================
 // Cover color is derived from a hash of the pairing, so related books share a color
@@ -406,7 +406,8 @@ const ICON = (() => {
 
 // ================= Dialogs (iOS-style) =================
 // confirmDialog → Promise<boolean>; promptDialog → Promise<string|null>
-function dialog({ title, message = '', input = null, ok = '确定', danger = false }) {
+// safe: the cancel button is the prominent one (on the right) and the action only a faint one
+function dialog({ title, message = '', input = null, ok = '确定', danger = false, safe = false, cancel = '取消' }) {
   return new Promise(resolve => {
     const root = document.createElement('div');
     root.className = 'alert';
@@ -418,8 +419,9 @@ function dialog({ title, message = '', input = null, ok = '确定', danger = fal
           ${input !== null ? `<input class="alert-input" value="${esc(input.value || '')}" placeholder="${esc(input.placeholder || '')}" maxlength="${input.max || 80}">` : ''}
         </div>
         <div class="alert-actions">
-          ${ok === '好' && input === null ? '' : '<button data-r="0">取消</button>'}
-          <button data-r="1" class="${danger ? 'danger' : 'strong'}">${esc(ok)}</button>
+          ${safe ? `<button data-r="1" class="faint">${esc(ok)}</button><button data-r="0" class="strong">${esc(cancel)}</button>` : `
+          ${ok === '好' && input === null ? '' : `<button data-r="0">${esc(cancel)}</button>`}
+          <button data-r="1" class="${danger ? 'danger' : 'strong'}">${esc(ok)}</button>`}
         </div>
       </div>`;
     document.body.appendChild(root);
@@ -462,7 +464,6 @@ function quickSheet(html, cls = '') {
 // ================= Library =================
 const Library = {
   filter: 'all',            // 'all' | 'f:<folder>' | 't:<tag>'
-  showHidden: false,
   books: [],
   selecting: false,
   selected: new Set(),
@@ -510,7 +511,6 @@ const Library = {
   visible() {
     const f = this.filter;
     const list = this.books
-      .filter(b => !!b.hidden === this.showHidden)
       .filter(b => f === 'all' || (f.startsWith('f:') ? b.folder === f.slice(2) : (b.userTags || []).includes(f.slice(2))));
     return sortBooks(list);
   },
@@ -528,23 +528,20 @@ const Library = {
     // Sub-header: count and today's reading time
     const today = (await DB.allDaily()).filter(r => r.date === new Date().toLocaleDateString('sv')).reduce((n, r) => n + r.ms, 0);
     document.getElementById('shelf-count').innerHTML = this.books.length
-      ? `${this.showHidden ? '隐藏的书 · ' : ''}共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
+      ? `共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
     // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
     // (long-press) and in the data, and the 't:' filter in visible() is kept for later versions.
     const chips = document.getElementById('chips');
     const chip = (key, label, icon = '') => `<button data-filter="${esc(key)}" class="${this.filter === key ? 'on' : ''}">${icon}${esc(label)}</button>`;
-    chips.innerHTML = this.showHidden
-      ? `<button class="on back-hidden" data-filter="__unhide">${ICON.show}退出隐藏书架</button>`
-        + chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('')
-      : `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
+    chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
         + (folders.length ? chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('') : '');
 
     // Continue reading: the book opened most recently (not one already finished)
     const cont = document.getElementById('continue');
-    let last = !this.showHidden && !this.selecting && this.books
-      .filter(b => b.lastReadAt && !b.hidden && statusOf(b) !== 'done')
+    let last = !this.selecting && this.books
+      .filter(b => b.lastReadAt && statusOf(b) !== 'done')
       .sort((a, b) => b.lastReadAt - a.lastReadAt)[0];
     cont.classList.toggle('hidden', !last);
     if (last) {
@@ -562,7 +559,7 @@ const Library = {
     SHELF_MODES.forEach(m => grid.classList.toggle('mode-' + m.key, m.key === mode));
     this.renderModeBtn();
     requestAnimationFrame(() => { fitShelf(); fitTitles(grid); });
-    if (!this.books.length || (!list.length && this.filter === 'all' && !this.showHidden)) {
+    if (!this.books.length || (!list.length && this.filter === 'all')) {
       grid.innerHTML = `
         <div class="empty">
           <div class="empty-art"><span></span><span></span><span></span></div>
@@ -654,7 +651,6 @@ const Library = {
       }
       const b = e.target.closest('[data-filter]');
       if (!b) return;
-      if (b.dataset.filter === '__unhide') { this.showHidden = false; this.filter = 'all'; }
       else this.filter = b.dataset.filter;
       this.render();
     };
@@ -710,7 +706,6 @@ const Library = {
           ${stamp('cover', ICON.image, '封面', !!b.cover)}
           ${stamp('share', ICON.share, '导出')}
           ${stamp('stats', ICON.chart, '统计')}
-          ${stamp('hide', b.hidden ? ICON.show : ICON.hide, b.hidden ? '取消隐藏' : '隐藏', !!b.hidden)}
         </div>
         <div class="bc-cover hidden">
           <button data-act="cover-set">从相册选择</button>
@@ -848,13 +843,6 @@ const Library = {
         await this.update(ids, m => { applyStatus(m, s); if (s === 'done' && !m.rating) unrated.push(m); });
         toast('已标记为' + STATUS_NAMES[s]);
         if (unrated.length === 1) setTimeout(() => askRating(unrated[0]), 500);
-        break;
-      }
-      case 'hide': {
-        const metas = await Promise.all(ids.map(id => DB.getMeta(id)));
-        const hide = !metas.every(m => m.hidden);
-        await this.update(ids, m => { m.hidden = hide; });
-        toast(hide ? `已隐藏 ${ids.length} 本` : '已取消隐藏');
         break;
       }
       case 'delete': {
@@ -1078,8 +1066,6 @@ const Library = {
     document.querySelector('#select-top .st-count').textContent = n ? `已选 ${n} 本` : '选择书籍';
     document.querySelector('#select-top [data-sa]').textContent = n === total && total ? '全不选' : '全选';
     document.querySelectorAll('#select-bar button').forEach(b => { b.disabled = !n; });
-    const hideBtn = document.querySelector('#select-bar [data-act="hide"]');
-    hideBtn.innerHTML = `${this.showHidden ? ICON.show : ICON.hide}<span>${this.showHidden ? '取消隐藏' : '隐藏'}</span>`;
   },
 
   bindSelectBar() {
@@ -1099,7 +1085,7 @@ const Library = {
       if (act === 'cover') return this.popover(btn, [['cover-set', '修改封面'], ['cover-clear', '清除封面']], ids);
       if (act === 'more') return this.popover(btn, [['status-menu', '修改阅读状态', true], ['delete', '删除', false, 'danger']], ids);
       const done = await this.run(act, ids);
-      if (['pin', 'hide'].includes(act) && done !== false) this.exitSelect();
+      if (act === 'pin' && done !== false) this.exitSelect();
     };
   },
 

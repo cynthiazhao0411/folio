@@ -575,10 +575,10 @@ async function takePendingOpen() {
 // in the reader is closed first (its place is saved as on any close).
 let arriving = false;
 async function findArrived({ id, title }) {
-  const all = await DB.allMeta();
+  const all = await DB.allMeta(), bare = cleanTitle(title).title;
   const b = /^\d+$/.test(id) ? all.find(m => (m.source || '').match(/\/works\/(\d+)/)?.[1] === id)
-    : title ? all.filter(m => m.title === title || bookName(m.title) === title).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
-  return b && !b.hidden ? b : null;
+    : title ? all.filter(m => m.title === title || m.title === bare || bookName(m.title) === bare).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
+  return b || null;
 }
 async function fetchArrived({ id }) {
   if (!/^\d+$/.test(id) || !Sync.repoMode) return false;
@@ -590,12 +590,13 @@ async function fetchArrived({ id }) {
   return true;
 }
 async function arrive(target, how, marked) {
+  if (DEMO) return;
   if (!Sync.on || arriving) return;
   arriving = true;
   let note = null, opened = false;
   const slow = setTimeout(() => {                         // a line only when it takes a moment
     note = progressToast();
-    note.set(target?.title ? `正在收取《${bookName(target.title)}》…` : '正在收取新书…');
+    note.set(target?.title ? `正在收取《${cleanTitle(target.title).title}》…` : '正在收取新书…');
   }, 600);
   try {
     // The bookmark's note: needed when the address named no book; otherwise only marked as used
@@ -606,7 +607,7 @@ async function arrive(target, how, marked) {
       if (a) { target = { id: String(a.id).replace(/[^\w-]/g, '').slice(0, 40), title: String(a.title || '').slice(0, 80) }; viaNote = true; }
     }
     if (!target && !marked) return;                        // an ordinary launch: nothing just arrived
-    arrivalLog(`${how}：${target ? `要打开《${bookName(target.title || target.id)}》` : '没有指定书'}${viaNote ? '（收书记录）' : ''}`);
+    arrivalLog(`${how}：${target ? `要打开《${cleanTitle(target.title || target.id).title}》` : '没有指定书'}${viaNote ? '（收书记录）' : ''}`);
     if (!target) {
       await Sync.check(true);
       if (!Sync.reading()) await Library.render();
@@ -620,7 +621,7 @@ async function arrive(target, how, marked) {
     if (!b) { await Sync.check(true); b = await findArrived(target); }
     if (!b) {
       arrivalLog('书架上没找到这本书');
-      toast(`书架上没找到${target.title ? `《${bookName(target.title)}》` : '这本书'}`);
+      toast(`书架上没找到${target.title ? `《${cleanTitle(target.title).title}》` : '这本书'}`);
       return;
     }
     clearTimeout(slow); note?.done(); note = null;
@@ -676,11 +677,6 @@ document.getElementById('btn-more').onclick = async () => {
 };
 document.getElementById('btn-sync').onclick = async () => { await Sheet.close(moreSheet); Sync.openPanel(); };
 document.getElementById('btn-more-close').onclick = () => Sheet.close(moreSheet);
-document.getElementById('btn-hidden').onclick = async () => {
-  await Sheet.close(moreSheet);
-  Library.showHidden = true; Library.filter = 'all';
-  Library.render();
-};
 
 // Desktop browsers (Chrome, Edge, Safari) also expose the Web Share API, but sharing a file there needs
 // a fresh click and a share target. Reading every store takes time, so the click had already expired and
@@ -715,7 +711,7 @@ document.getElementById('btn-backup').onclick = async () => {
   await Sheet.close(moreSheet);
   const wait = quickSheet(`<div class="pk-title">正在备份…<small>打包所有书、进度、笔记和设置，并逐项检查</small></div><div class="bk-spin"></div>`);
   let result;
-  try { result = await Backup.create(); }
+  try { result = await DB.onMain(() => Backup.create()); }
   catch (err) {
     console.error('backup failed', err);
     await wait.close();
@@ -814,9 +810,27 @@ cleanTitles().finally(renderShelf);
 Sync.init();
 CloudBackup.init();
 
+// The version label switches between the own shelf and the demo shelf, with no visible feedback
+// (to the demo shelf at once; back only with the code, behind a warning meant to stop a stray tap)
+document.querySelector('.app-version').onclick = async () => {
+  if (DEMO) {
+    await Sheet.close(moreSheet);
+    const typed = await dialog({
+      title: '⚠️ 请问你是否确定要永久删除这台设备和云端上的所有书、书签、批注、高光、阅读记录、阅读时长、评分和书评、文件夹和标签等等一切数据，然后注销你的账号，一键回到出厂设置吗？',
+      message: '请注意：这是一个无法撤销的操作！\n\n一旦确认，你书架上的所有书、书签、批注、高光、阅读记录、阅读时长、评分和书评、文件夹和标签，以及这台设备和云端上的备份，都会被立即、彻底、永久地删除，然后你的账号会被注销，Folio 会一键回到出厂设置。\n\n删除之后，任何人都无法帮你找回任何一本书、任何一条批注或任何一条阅读记录，包括所有备份在内。\n\n如果你确定要删除一切并注销账号，请在下方输入框中输入：是的我要删除一切并注销账号',
+      input: { placeholder: '是的我要删除一切并注销账号', max: 40 }, ok: '永久删除一切并注销', safe: true, cancel: '取消，保留数据',
+    });
+    if (typed !== '0603') return;
+    try { localStorage.removeItem('folio-shelf'); } catch {}
+  } else {
+    try { localStorage.setItem('folio-shelf', 'demo'); } catch {}
+  }
+  location.reload();
+};
+
 // Without device sync, the data lives only on this device: a gentle weekly reminder to back up
 setTimeout(async () => {
-  if (Sync.on || !(await DB.allMeta()).length) return;
+  if (DEMO || Sync.on || !(await DB.allMeta()).length) return;
   if (!localStorage.getItem('folio-backup-at')) localStorage.setItem('folio-backup-at', Date.now());   // start counting now
   const at = +localStorage.getItem('folio-backup-at'), asked = +localStorage.getItem('folio-backup-asked') || 0;
   const week = 7 * 864e5;

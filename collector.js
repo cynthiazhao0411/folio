@@ -82,8 +82,20 @@
     if (rest.length) m.append('\n' + rest.join('\n'));
   };
   // A short form of the title: drop a leading 【tag】, keep 12 characters
+  // Titles as Folio shows them: no brackets (with what is inside) at either end (ui.js, cleanTitle)
+  const bareTitle = t => {
+    let s = String(t || '').trim();
+    const O = '【\\[(（{［｛〔〖', C = '】\\])）}］｝〕〗';
+    const head = new RegExp(`^[${O}][^${O}${C}]*[${C}]\\s*`), tail = new RegExp(`\\s*[${O}][^${O}${C}]*[${C}]$`);
+    for (let k = 0, m; k < 8; k++) {
+      if ((m = s.match(head)) && m[0].length < s.length) { s = s.slice(m[0].length).trim(); continue; }
+      if ((m = s.match(tail)) && m.index > 0) { s = s.slice(0, m.index).trim(); continue; }
+      break;
+    }
+    return s || String(t || '').trim();
+  };
   const shortTitle = t => {
-    const s = String(t || '').replace(/^\s*[【\[［〔(（][^】\]］〕)）]{1,24}[】\]］〕)）]\s*/, '').trim() || String(t || '').trim();
+    const s = bareTitle(t);
     const c = Array.from(s);
     return c.length > 12 ? c.slice(0, 12).join('') + '…' : s;
   };
@@ -322,7 +334,7 @@
       try {
         const work = await fetchWork(id);
         say(`正在抓取 ${Math.min(n, total)} / ${total}` + hint, shortTitle(work.title));
-        if (await deliver(work)) { job.done.push(id); sent++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: work.title }; }
+        if (await deliver(work)) { job.done.push(id); sent++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: bareTitle(work.title) }; }
         delete job.failed[id];
       } catch (e) {
         job.failed[id] = e.message;
