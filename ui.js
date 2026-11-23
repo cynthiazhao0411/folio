@@ -26,6 +26,35 @@ function parseBookTitle(raw) {
   const name = (s.slice(0, m.index).trimEnd() + sep + s.slice(end).trimStart()).trim();
   return name ? { name, cp, raw: s } : { name: s, cp: '', raw: s };
 }
+// Titles keep no brackets at either end: every 【…】 [...] (...) {...} （…） ［…］ ｛…｝ 〔…〕 〖…〗 in front of or
+// after the name goes, together with what is inside, e.g. "【完结】曼哈顿娇妻(凯孙)" → "曼哈顿娇妻". What was
+// taken off is returned: `tags` (all of it) and `cp`, the pairing (the first part that is not a status
+// such as 完结 or 连载). A title that is nothing but brackets is left as it is.
+const TITLE_STATUS = /^(已?完结|完本|全文完|连载中?|更新中?|已更|番外|正文完|HE|BE|OE|短篇|中篇|长篇|完|新|[上中下全]|[0-9一二三四五六七八九十]+)$/i;
+function cleanTitle(raw) {
+  const s0 = String(raw ?? '').trim(), tags = [];
+  const O = '【\\[(（{［｛〔〖', C = '】\\])）}］｝〕〗';
+  const head = new RegExp(`^[${O}]([^${O}${C}]*)[${C}]\\s*`), tail = new RegExp(`\\s*[${O}]([^${O}${C}]*)[${C}]$`);
+  let s = s0, m;
+  for (let k = 0; k < 8; k++) {
+    if ((m = s.match(head)) && m[0].length < s.length) { tags.push(m[1].trim()); s = s.slice(m[0].length).trim(); continue; }
+    if ((m = s.match(tail)) && m.index > 0) { tags.push(m[1].trim()); s = s.slice(0, m.index).trim(); continue; }
+    break;
+  }
+  if (!s) return { title: s0, tags: [], cp: '' };
+  const named = tags.filter(Boolean);
+  return { title: s, tags: named, cp: named.find(t => !TITLE_STATUS.test(t)) || '' };
+}
+// Applies cleanTitle to a book record (the import and the one-time pass over the shelf use it):
+// the name only in `title`; what came off in `titleTags`, the pairing in `cp` (kept if already set)
+function cleanBookTitle(m) {
+  const c = cleanTitle(m.title);
+  if (c.title === m.title) return false;
+  m.title = c.title;
+  if (c.cp && !m.cp) m.cp = c.cp;
+  m.titleTags = [...new Set([...(m.titleTags || []), ...c.tags])];
+  return true;
+}
 const bookName = raw => parseBookTitle(raw).name;
 const bookCP = raw => parseBookTitle(raw).cp;
 

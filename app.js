@@ -315,11 +315,13 @@ async function importBooks(sources, open = true, onProgress) {
       const { chapters, ...info } = book;
       // Re-importing a book keeps everything you did with it on the shelf
       const keep = {};
-      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette'])
+      cleanBookTitle(info);                                     // no 【…】 (…) at either end of a title
+      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette', 'cp'])
         if (old?.[k] !== undefined) keep[k] = old[k];
       for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
         if (old?.[k] !== undefined) keep[k] = old[k];
       if (old?.renamed) info.title = old.title;
+      if (old?.titleTags) info.titleTags = [...new Set([...old.titleTags, ...(info.titleTags || [])])];
       // Every import that changes the book is remembered; new chapters get a badge on the shelf
       const versions = [...(keep.versions || [])];
       const prev = versions[versions.length - 1] || (old ? { chapters: old.chapterCount, words: old.words } : null);
@@ -800,7 +802,15 @@ document.getElementById('btn-undo-restore').onclick = async () => {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 navigator.storage?.persist?.();
 
-renderShelf();
+// Every title on the shelf without brackets at either end (books from before this rule, or from a
+// device that had not updated yet); only changed records are written
+async function cleanTitles() {
+  try {
+    const changed = (await DB.allMeta()).filter(m => cleanBookTitle(m));
+    if (changed.length) { await DB.putMany('meta', changed); DB.onWrite?.('meta'); }
+  } catch (e) { console.warn('titles:', e); }
+}
+cleanTitles().finally(renderShelf);
 Sync.init();
 CloudBackup.init();
 

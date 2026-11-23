@@ -73,7 +73,7 @@ function coverSubtitle(b) {
   return metaGroup(b, /relationship|pairing|配对|\bcp\b/i)[0] || b.authors.join('、') || '';
 }
 // The pairing taken from the 【】 in the title: shown under the jacket on the cover page only
-const coverCP = b => bookCP(b.title);
+const coverCP = b => b.cp || bookCP(b.title);
 
 // Titles often carry a bracketed tag in front and a status at the end, e.g.
 // "【tag】Main Title (完结)". Typeset them separately: small tag above, the main title
@@ -282,7 +282,7 @@ function systemTags(b) {
   const stats = Object.entries(b.tags || {}).find(([k]) => /stat/i.test(k))?.[1]?.[0] || '';
   const ch = String(stats).match(/Chapters:\s*(\d+)\s*\/\s*(\d+|\?)/);
   if (ch) out.push(ch[2] !== '?' && ch[1] === ch[2] ? '完结' : '连载');
-  else if (/完结|完本|全文完/.test(b.title || '')) out.push('完结');
+  else if (/完结|完本|全文完/.test([b.title, ...(b.titleTags || [])].join(' '))) out.push('完结');
   if ((b.reads || 0) >= 2 || (b.reads && b.run?.ms > 0 && !b.run.counted)) out.push('重读');
   return out;
 }
@@ -823,9 +823,8 @@ const Library = {
     switch (act) {
       case 'rename': {
         const t = await promptDialog({ title: '重命名', value: bookName(one.title), ok: '保存' });
-        // The pairing in the stored title stays with the book when only the name is changed
-        const keepCP = bookCP(one.title);
-        if (t) await this.update(ids, m => { m.title = keepCP && !bookCP(t) ? `【${keepCP}】${t}` : t; m.renamed = true; });
+        // Brackets at either end come off here too; a pairing typed in them becomes the book's pairing
+        if (t) await this.update(ids, m => { const c = cleanTitle(t); m.title = c.title; if (c.cp) m.cp = c.cp; m.renamed = true; });
         break;
       }
       case 'move': return this.pickFolder(ids);
