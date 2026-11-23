@@ -511,14 +511,15 @@ document.getElementById('btn-turn').onclick = () => {
 // Opened from the 收书 panel's "打开 Folio": either a link to Folio's own address marked #from=collect
 // (Chrome opens it in the installed app: navigation capturing) or a web+folio:// link (the manifest's
 // protocol_handlers, which Chrome registers with the operating system when Folio is installed; it
-// arrives as ?open=...). Either way, collect the inbox now and show the shelf. When Folio is already
-// open, launch_handler focus-existing brings that window forward and the launch arrives in launchQueue.
-// The marker is removed from the address so a reload does not repeat it.
-// A tapped 收书 notification (push.js) arrives the same way: ?from=push when it opens Folio, or a
-// 'push-open' message from sw.js when it brings an open Folio forward.
-// Each of these may name the last work the batch delivered (book=<work id>, t=<title>): once the inbox
-// is collected, that book opens in the reader on its first page, the cover. Without it, or when the
-// book is not on the shelf, Folio just shows the shelf.
+// arrives as ?open=...). When Folio is already open, launch_handler focus-existing brings that window
+// forward and the launch arrives in launchQueue. A tapped 收书 notification (push.js) arrives as
+// ?from=push when it opens Folio, or as a 'push-open' message from sw.js when it brings an open Folio
+// forward. The marker is removed from the address so a reload does not repeat it.
+// Each of these may name the last work the batch delivered (book=<work id>, t=<title>). The address
+// does not always get through (iOS shows its notifications itself and may start or bring forward the
+// app without it), so the bookmark also leaves that work in the repository (inbox/arrived.json, see
+// freshArrival). Either way the inbox is collected and the book opens in the reader on its first page,
+// the cover. Without a book, or when it is not on the shelf, Folio just shows the shelf.
 const FROM_COLLECT = /#from=collect|[?&]open=web(%2B|\+)folio|[?&]from=push/i;
 function arrivalBook(href) {
   try {
@@ -530,20 +531,28 @@ function arrivalBook(href) {
     return id ? { id, title: (q.get('t') || '').slice(0, 80) } : null;
   } catch { return null; }
 }
+const launchHref = location.href;                       // the launch itself (launchQueue may report it again)
 const fromCollect = FROM_COLLECT.test(location.href), arrivedBook = fromCollect ? arrivalBook(location.href) : null;
 const launchedByPush = /[?&]from=push/.test(location.search);
 if (fromCollect) history.replaceState(null, '', location.pathname);
-// While it works a line says so ("正在收取新书…"), so the wait after a tap is visible
-async function collectNow(target, fromPush) {
-  if (!Sync.on) return;
-  const note = fromPush || target ? progressToast() : null;
-  note?.set(target?.title ? `正在收取《${bookName(target.title)}》…` : '正在收取新书…');
+// A short record of the last attempts, shown under 设备同步 → 收书通知, so a phone can tell where a jump stopped
+function arrivalLog(line) {
   try {
-    await Sync.check(true);
-    if (Sync.reading()) return;                            // never under an open book; the shelf redraws on close
-    await Library.render();
-    if (target && !(await showArrived(target))) toast(`书架上没找到${target.title ? `《${bookName(target.title)}》` : '这本书'}`);
-  } finally { note?.done(); }
+    const log = JSON.parse(localStorage.getItem('folio-arrival-log') || '[]');
+    log.push({ at: Date.now(), line });
+    localStorage.setItem('folio-arrival-log', JSON.stringify(log.slice(-12)));
+  } catch { /* storage full or blocked: the log is only a help */ }
+}
+// The bookmark's note at the end of a batch: { id, title, at } of the last work that reached the
+// inbox. Each device opens it once, and only within a quarter of an hour of the batch.
+const ARRIVAL_FRESH = 15 * 60e3;
+async function freshArrival() {
+  if (!Sync.on || !Sync.repoMode || !navigator.onLine) return null;
+  try {
+    const a = JSON.parse(await Repo.file('inbox/arrived.json') || 'null');
+    if (!a?.id || !a.at || Date.now() - a.at > ARRIVAL_FRESH) return null;
+    return +(localStorage.getItem('folio-arrival-seen') || 0) >= a.at ? null : a;
+  } catch (e) { arrivalLog('读不到到达记录：' + e.message); return null; }
 }
 // The note sw.js leaves when a notification is tapped (see there); used once, and only if fresh
 async function takePendingOpen() {
@@ -555,44 +564,101 @@ async function takePendingOpen() {
     return Date.now() - p.at < 10 * 60e3 ? p.url : null;
   } catch { return null; }
 }
+// Open the book that arrived, as fast as possible: if it is already on the shelf it opens at once;
+// otherwise only its own inbox file is read and imported (one request), and the rest of the batch
+// (and the upload) follows in an ordinary sync once the book is open. A full sync comes first only
+// when that does not find it (an e-book file, or the work already collected on the other device).
+// `target`: the book the address named, if any; `how`: what brought Folio up (for the record);
+// `marked`: Folio was opened for a batch, so the inbox is collected even without a book. A book open
+// in the reader is closed first (its place is saved as on any close).
 let arriving = false;
-async function arriveFrom(url) {
-  if (arriving) return;
-  arriving = true;
-  try { await collectNow(arrivalBook(url), true); } finally { arriving = false; }
-}
-// The book a batch ended with: a collected work is found by its source (…/works/<id>), an e-book
-// file sent from a page by its title (the newest such book)
-async function showArrived({ id, title }) {
+async function findArrived({ id, title }) {
   const all = await DB.allMeta();
   const b = /^\d+$/.test(id) ? all.find(m => (m.source || '').match(/\/works\/(\d+)/)?.[1] === id)
     : title ? all.filter(m => m.title === title || bookName(m.title) === title).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
-  if (!b || b.hidden) return false;
-  if (Library.filter !== 'all') { Library.filter = 'all'; await Library.render(); }
-  const card = document.querySelector(`.card[data-id="${CSS.escape(b.id)}"]`);
-  if (!card) return false;
-  card.scrollIntoView({ block: 'center' });
-  await new Promise(r => setTimeout(r, 250));
-  openBook(b.id, card.querySelector('.cover'), true);
+  return b && !b.hidden ? b : null;
+}
+async function fetchArrived({ id }) {
+  if (!/^\d+$/.test(id) || !Sync.repoMode) return false;
+  const name = `in-${id}.html`, text = await Repo.file('inbox/' + name);
+  if (!text) return false;
+  const list = await Sync.inboxBooks(name, text);
+  if (!list.length) return false;
+  await importBooks(list, false);
   return true;
 }
-// Launch: the address itself, or else the note a tapped notification left. Coming to the front or a
-// message from sw.js: the note (removed, so one tap opens the book once).
+async function arrive(target, how, marked) {
+  if (!Sync.on || arriving) return;
+  arriving = true;
+  let note = null, opened = false;
+  const slow = setTimeout(() => {                         // a line only when it takes a moment
+    note = progressToast();
+    note.set(target?.title ? `正在收取《${bookName(target.title)}》…` : '正在收取新书…');
+  }, 600);
+  try {
+    // The bookmark's note: needed when the address named no book; otherwise only marked as used
+    const fresh = freshArrival().then(a => { if (a) try { localStorage.setItem('folio-arrival-seen', String(a.at)); } catch { /* opens again next time */ } return a; });
+    let viaNote = false;
+    if (!target) {
+      const a = await fresh;
+      if (a) { target = { id: String(a.id).replace(/[^\w-]/g, '').slice(0, 40), title: String(a.title || '').slice(0, 80) }; viaNote = true; }
+    }
+    if (!target && !marked) return;                        // an ordinary launch: nothing just arrived
+    arrivalLog(`${how}：${target ? `要打开《${bookName(target.title || target.id)}》` : '没有指定书'}${viaNote ? '（收书记录）' : ''}`);
+    if (!target) {
+      await Sync.check(true);
+      if (!Sync.reading()) await Library.render();
+      return;
+    }
+    let b = await findArrived(target);
+    if (!b) {
+      try { if (await fetchArrived(target)) { b = await findArrived(target); if (b) arrivalLog('直接从收件箱取到这本'); } }
+      catch (e) { arrivalLog('直接取书失败：' + e.message); }
+    }
+    if (!b) { await Sync.check(true); b = await findArrived(target); }
+    if (!b) {
+      arrivalLog('书架上没找到这本书');
+      toast(`书架上没找到${target.title ? `《${bookName(target.title)}》` : '这本书'}`);
+      return;
+    }
+    clearTimeout(slow); note?.done(); note = null;
+    if (Sync.reading()) {
+      if (current?.id === b.id) { arrivalLog('这本书已经打开'); return; }
+      await closeBook();
+      arrivalLog('先合上了正在读的书');
+    }
+    if (Library.filter !== 'all') Library.filter = 'all';
+    await Library.render();
+    document.querySelector(`.card[data-id="${CSS.escape(b.id)}"]`)?.scrollIntoView({ block: 'center' });
+    await openBook(b.id, null, true);
+    opened = true;
+    arrivalLog('已打开封面页');
+  } catch (e) {
+    arrivalLog('出错：' + e.message);
+  } finally {
+    clearTimeout(slow);
+    note?.done();
+    arriving = false;
+    if (opened) setTimeout(() => Sync.check(), 2500);     // the rest of the inbox and the upload, once the book is open
+  }
+}
+// Launch: the address, or the note a tapped notification left, or the bookmark's note in the
+// repository. Coming to the front or a message from sw.js: the same, without the address.
 addEventListener('load', () => setTimeout(async () => {
   const pending = await takePendingOpen();
-  if (fromCollect) collectNow(arrivedBook, launchedByPush || !!pending);
-  else if (pending) arriveFrom(pending);
+  const target = arrivedBook || (pending ? arrivalBook(pending) : null);
+  arrive(target, fromCollect ? (launchedByPush ? '点通知启动' : '打开 Folio') : pending ? '点通知启动（记录）' : '启动', fromCollect || !!pending);
 }, 300));
-if ('launchQueue' in window) launchQueue.setConsumer(p => { if (FROM_COLLECT.test(p?.targetURL || '')) collectNow(arrivalBook(p.targetURL)); });
+if ('launchQueue' in window) launchQueue.setConsumer(p => { if (p?.targetURL !== launchHref && FROM_COLLECT.test(p?.targetURL || '')) arrive(arrivalBook(p.targetURL), '打开 Folio（已在运行）', true); });
 navigator.serviceWorker?.addEventListener('message', async e => {
   if (e.data?.type !== 'push-open') return;
   await takePendingOpen();
-  arriveFrom(e.data.url || '');
+  arrive(arrivalBook(e.data.url || ''), '点通知切回', true);
 });
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) return;
   const pending = await takePendingOpen();
-  if (pending) arriveFrom(pending);
+  arrive(pending ? arrivalBook(pending) : null, pending ? '点通知切回（记录）' : '切回前台', !!pending);
 });
 
 function toast(msg) {

@@ -255,13 +255,29 @@
   // push/subscription.json exists) and at least one work arrived. Uses the same token (Contents:
   // read and write); any problem here is ignored, so collecting never depends on it.
   // `last`: the last work of the batch that arrived ({ id, title }); Folio opens its card
+  // The last work of the batch, left in the repository (inbox/arrived.json) so Folio opens it however
+  // it is brought up next: the notification, the 打开 Folio button or switching back by hand
+  async function markArrival(last) {
+    const path = '/contents/inbox/arrived.json';
+    const body = { message: 'inbox: arrived', branch: CFG.branch,
+      content: utf8b64(JSON.stringify({ id: String(last.id), title: String(last.title || '').slice(0, 80), at: Date.now() })) };
+    for (let i = 0; i < 3; i++) {
+      try { await api('PUT', body, path); return; } catch (e) {
+        if (e.status !== 422 && e.status !== 409) return;  // 422: the file is there (its sha is needed); 409: it changed meanwhile
+        try { body.sha = (await api('GET', null, path + '?ref=' + CFG.branch)).sha; } catch { return; }
+      }
+    }
+  }
+  // One notification per batch: a repository_dispatch event; the repository's workflow
+  // (folio-push.yml) sends it to every device that turned notifications on (push/subscription*.json)
   async function notifyBatch(ok, failed, titles, last) {
     if (!CFG.repo || !ok || blocked) return;
+    if (last) await markArrival(last).catch(() => {});
     try {
       const t = new AbortController(); setTimeout(() => t.abort(), 6000);
-      const has = await send(API + `/contents/push/subscription.json?ref=${CFG.branch}`, { cache: 'no-store', signal: t.signal,
+      const has = await send(API + `/contents/push?ref=${CFG.branch}`, { cache: 'no-store', signal: t.signal,
         headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' } });
-      if (!has.ok) return;
+      if (!has.ok || !(await has.json()).some?.(f => /^subscription[^/]*\.json$/.test(f.name))) return;
       await send(API + '/dispatches', { method: 'POST', signal: t.signal, headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' },
         body: JSON.stringify({ event_type: 'folio-collected', client_payload: { ok, failed, titles: titles.slice(0, 3), last: last || null, at: Date.now() } }) });
     } catch { /* no notification this time; the works are in the inbox all the same */ }
@@ -278,9 +294,10 @@
       }, true], ['关闭', () => window.__folio.close()]]);
     } else {
       const open = n ? openButtons() : null;
-      const how = IOS ? (open ? '点下面的按钮，或回到主屏幕的 Folio，新书会自己出现。' : '回到主屏幕的 Folio（或从 App 切换器切回去），新书会自己出现。')
-        : open ? '点「打开 Folio」就能看到。' : '打开 Folio 就能看到。';
-      say(n ? `已送到 Folio ✓ 共 ${n} 篇\n${how}${extra}` : '没有需要送的作品。' + extra);
+      // Sent is not shelved: Folio takes the works in when it opens (and opens the last one, within 15 minutes)
+      const how = IOS ? '切回主屏幕的 Folio，会马上收进书架，并打开最后一本。'
+        : open ? '点「打开 Folio」，会马上收进书架，并打开最后一本。' : '打开 Folio 时会收进书架，并打开最后一本。';
+      say(n ? `已送出 ✓ 共 ${n} 篇\n${how}${extra}` : '没有需要送的作品。' + extra);
       buttons(open || [['好', () => window.__folio.close(), true]]);
     }
   }

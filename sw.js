@@ -1,7 +1,7 @@
 // sw.js — Service worker for offline support
 // Online: network-first, so a new deployment is picked up on the next launch; responses are cached.
 // Offline: serve from cache so the app and imported books still work.
-const CACHE = 'folio-1.3.3';
+const CACHE = 'folio-1.3.5';
 const FILES = [
   './', 'index.html', 'style.css', 'app.js', 'desktop.js', 'reader.js', 'annotations.js', 'stats.js', 'cover.js', 'epub.js', 'backup.js', 'library.js', 'sync.js', 'cloud.js', 'repo.js', 'migrate.js', 'importer.js', 'formats.js', 'links.js', 'db.js', 'ui.js', 'lib/t2s.js', 'collector.js', 'push.js',
   'fonts/NotoSerifSC-Regular.woff', 'fonts/NotoSerifSC-Medium.woff', 'fonts/sans/sans.css', 'fonts/sans/folio-quotes.woff2', 'fonts/inter-latin-wght-normal.woff2',
@@ -23,17 +23,24 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  // The page itself is fetched past every cache: with a unique query, so neither the browser nor
+  // GitHub Pages' CDN can hand back an older index.html (whose version line and script addresses
+  // would then lag behind the deployment). It is cached under the app's own address for offline use.
+  const nav = req.mode === 'navigate';
   e.respondWith((async () => {
     try {
+      const url = new URL(req.url);
+      if (nav) url.searchParams.set('_', Date.now());
       // Fall back to cache if the network takes longer than 4 s
-      const res = await Promise.race([
-        fetch(req, { cache: 'no-cache' }),
+      let res = await Promise.race([
+        nav ? fetch(url.href, { cache: 'no-store', credentials: 'same-origin' }) : fetch(req, { cache: 'no-cache' }),
         new Promise((_, reject) => setTimeout(() => reject('timeout'), 4000)),
       ]);
-      if (res.ok) (await caches.open(CACHE)).put(req, res.clone());
+      if (nav && res.ok) res = new Response(await res.blob(), { status: res.status, statusText: res.statusText, headers: res.headers });
+      if (res.ok) (await caches.open(CACHE)).put(nav ? self.registration.scope : req, res.clone());
       return res;
     } catch {
-      return (await caches.match(req, { ignoreSearch: true })) || caches.match('index.html');
+      return (nav ? await caches.match(self.registration.scope) : await caches.match(req, { ignoreSearch: true })) || caches.match('index.html');
     }
   })());
 });

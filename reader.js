@@ -100,6 +100,7 @@ const Reader = {
     v.flow.innerHTML =
       (front ? '<div class="cover-spacer"></div><div class="cover-spacer"></div>' : '') +
       `<h2 class="ch-title">${T(c.title)}</h2>` +
+      (this.chEst(ch) ? `<div class="ch-est">本章${this.estText(this.chEst(ch))}</div>` : '') +
       this.authorNote(ch, 'start', T(c.notes)) +
       `<div class="ch-body">${T(clean(c.html))}</div>` +
       this.authorNote(ch, 'end', T(c.endNotes)) +
@@ -603,6 +604,14 @@ const Reader = {
 
   // ================= Table of contents =================
   // Bottom sheet with book info and three tabs: contents, bookmarks, notes
+  // A chapter's estimated reading time (stats.js): kept in the book's est, else counted from its text
+  chEst(i) {
+    const ms = this.book.est?.speed === READ_SPEED ? this.book.est.chapters?.[i] : null;
+    return ms ?? (this.book.chapters[i] ? Math.round(chapterChars(this.book.chapters[i]) / READ_SPEED * 60000) : 0);
+  },
+
+  estText(ms) { return ms < 60000 ? '不到 1 分钟' : '约 ' + fmtDur(ms, true); },
+
   showToc(tab = 'toc') {
     const b = this.book, modal = this.el.toc;
     const pct = (this.pct || 0).toFixed(1);
@@ -614,7 +623,7 @@ const Reader = {
     const empty = (icon, text) => `<div class="list-empty"><div class="le-icon">${icon}</div>${text}</div>`;
 
     const tocList = b.chapters.map((c, i) => `<a href="#" data-ch="${i}" class="${i === this.ch ? 'current' : ''}">
-      <span>${c.title}</span><small>${i + 1}</small></a>`).join('');
+      <span>${c.title}</span><small>${this.chEst(i) ? `${this.estText(this.chEst(i))} · ` : ''}${i + 1}</small></a>`).join('');
     const bmList = bms.length ? bms.map(a => `
       <div class="li" data-ch="${a.ch}" data-off="${a.start}">
         <div class="li-top"><span>${chName(a.ch)}</span><span>${date(a.createdAt)}</span></div>

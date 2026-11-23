@@ -144,6 +144,10 @@ input, textarea, select { font-family: inherit; }   /* form fields do not inheri
   content: ""; display: block; width: 2em; height: 1px;
   background: var(--accent); margin: .9em auto 0; opacity: .6;
 }
+.ch-est {
+  text-align: center; font-family: var(--default-font); font-size: .72em; color: var(--muted);
+  letter-spacing: .08em; margin: -1em 0 1.8em; break-before: avoid; user-select: none; -webkit-user-select: none;
+}
 .note-chip {
   display: inline-block; font-family: var(--default-font);
   font-size: .72em; color: var(--muted); border: 1px solid var(--line);
@@ -1105,3 +1109,6 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 /* 收书通知 (push.js): the private key, shown once when notifications are turned on */
 .push-key { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8em; word-break: break-all; user-select: all; -webkit-user-select: all;
   padding: .7em .8em; border-radius: 10px; background: color-mix(in srgb, var(--fg) 6%, transparent); margin: .4em 0 .8em; }
+.arrival-log { list-style: none; margin: 0 0 6px; padding: 0; font-size: .82em; color: color-mix(in srgb, var(--fg) 75%, transparent); line-height: 1.5; }
+.arrival-log li { padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent); }
+.arrival-log span { display: inline-block; min-width: 9.5em; margin-right: .6em; opacity: .7; font-variant-numeric: tabular-nums; }

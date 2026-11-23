@@ -1,6 +1,0 @@
-# Personal books and backups are never committed
-*.html
-!index.html
-*.txt
-folio-backup*.json
-node_modules/
