@@ -806,18 +806,26 @@ async function cleanTitles() {
     if (changed.length) { await DB.putMany('meta', changed); DB.onWrite?.('meta'); }
   } catch (e) { console.warn('titles:', e); }
 }
-cleanTitles().finally(async () => {
-  await renderShelf();
-  // Arriving from a shelf switch: show the page only once the new shelf is in place
-  const root = document.documentElement;
-  if (root.classList.contains('switching')) {
-    try { sessionStorage.removeItem('folio-switch'); } catch {}
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('shown')));
-    setTimeout(() => { root.classList.remove('switching', 'shown'); root.style.background = ''; }, 500);
-  }
-});
+cleanTitles().finally(renderShelf);
 Sync.init();
 CloudBackup.init();
+
+// Switch shelves in place, like switching accounts: the menu closes and the other shelf is simply
+// there, with no reload. A sync that is running finishes first, so nothing is written across shelves.
+async function switchShelf() {
+  while (Sync.busy) await new Promise(r => setTimeout(r, 100));
+  clearTimeout(Sync.timer);
+  DEMO = !DEMO;
+  try { DEMO ? localStorage.setItem('folio-shelf', 'demo') : localStorage.removeItem('folio-shelf'); } catch {}
+  DB._db?.close(); DB._db = null;
+  Sync.load(); Sync.remote = null; Sync.waiting = false;
+  if (Sync.repoMode) Sync.useRepo();
+  Library.filter = 'all';
+  if (Library.selecting) Library.exitSelect?.();
+  scrollTo(0, 0);
+  await renderShelf();
+  Sync.check();
+}
 
 // The version label switches between the own shelf and the demo shelf, with no visible feedback
 // (to the demo shelf at once; back only with the code, behind a warning meant to stop a stray tap)
@@ -830,16 +838,8 @@ document.querySelector('.app-version').onclick = async () => {
       input: { placeholder: '是的我要删除一切并注销账号', max: 40 }, ok: '永久删除一切并注销', safe: true, cancel: '取消，保留数据',
     });
     if (typed !== '0603') return;
-    try { localStorage.removeItem('folio-shelf'); } catch {}
-  } else {
-    try { localStorage.setItem('folio-shelf', 'demo'); } catch {}
-  }
-  // Fade out, reload on the other shelf, fade in there (no blank flash between the two)
-  const bg = getComputedStyle(document.body).backgroundColor;      // the page colour stays under the fade
-  document.documentElement.style.background = bg;
-  try { sessionStorage.setItem('folio-switch', bg); } catch {}
-  document.body.classList.add('leaving');
-  setTimeout(() => location.reload(), 230);
+  } else await Sheet.close(moreSheet);
+  await switchShelf();
 };
 
 // Without device sync, the data lives only on this device: a gentle weekly reminder to back up

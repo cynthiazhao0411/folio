@@ -811,10 +811,6 @@ body.theme-night .bc-delete { color: #e0806b; }
 .rp-later { background: none; border: none; color: var(--muted); font-size: .8em; padding: .8em 1em .4em; letter-spacing: .1em; }
 .bc-rate-hint { font-size: .7em; color: var(--accent); margin-top: .3em; letter-spacing: .05em; }
 
-/* Shelf switch: fade out, reload, fade back in once the new shelf is drawn */
-html.switching body { opacity: 0; }
-html.switching.shown body { opacity: 1; transition: opacity .32s ease-out; }
-body.leaving { opacity: 0; transition: opacity .22s ease-in; }
 .app-version { -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; cursor: default; outline: none; text-align: center; font-size: .7em; color: var(--muted); letter-spacing: .15em; padding-top: .4em; font-family: var(--font); }
 
 /* Device sync panel */

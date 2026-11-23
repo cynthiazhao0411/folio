@@ -18,7 +18,7 @@
 // Every store except contents is synced as one snapshot; contents are synced per book.
 // Second shelf for showing Folio to others: its own database (books, reading records, ratings,
 // statistics), never synced, backed up or fed by the inbox. Switched from the version label.
-const DEMO = (() => { try { return localStorage.getItem('folio-shelf') === 'demo'; } catch { return false; } })();
+let DEMO = (() => { try { return localStorage.getItem('folio-shelf') === 'demo'; } catch { return false; } })();
 
 const DB = {
   _db: null,

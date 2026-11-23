@@ -14,7 +14,7 @@
 //   inbox gist  in-*.html       works sent from a site by the 收书 bookmark (collector.js);
 //               library.json    what the bookmark needs to spot new chapters: [{ w, c, t, done }]
 // Keeping book text in its own gist means the frequent index updates stay small.
-const SYNC_DIR = DEMO ? 'demo-sync' : 'sync';
+const syncDir = () => DEMO ? 'demo-sync' : 'sync';
 
 const Sync = {
   API: 'https://api.github.com',
@@ -96,7 +96,7 @@ const Sync = {
   },
   async readIndex() {
     if (this.repoMode) {
-      const m = await Repo.manifest(SYNC_DIR);
+      const m = await Repo.manifest(syncDir());
       this.remote = m && m.app === 'folio-repo' && m.kind === 'sync' ? m : null;
       return this.remote;
     }
@@ -269,8 +269,8 @@ const Sync = {
     Object.assign(snap.manifest, { kind: 'sync', updatedAt, device: this.st.device });
     // Written only if sync/ is still what this device last saw; otherwise the other device wins
     const base = remote?.updatedAt ?? null;
-    await Repo.save(SYNC_DIR, snap, `sync: ${this.st.device}`, async head => {
-      const m = await Repo.manifest(SYNC_DIR, head.commit);
+    await Repo.save(syncDir(), snap, `sync: ${this.st.device}`, async head => {
+      const m = await Repo.manifest(syncDir(), head.commit);
       if ((m?.updatedAt ?? null) !== base) throw Object.assign(new Error('另一台设备刚刚同步过'), { changed: true });
     });
     this.remote = snap.manifest;

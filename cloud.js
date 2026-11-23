@@ -35,11 +35,10 @@ const CloudBackup = {
   load() { try { this.st = JSON.parse(localStorage.getItem('folio-cloud')) || {}; } catch { this.st = {}; } if (this.st.enabled === undefined) this.st.enabled = true; },
   save() { localStorage.setItem('folio-cloud', JSON.stringify(this.st)); },
   // A device still on the gists stops writing to them once another device moved the library
-  get on() { return Sync.on && this.st.enabled !== false && !(Sync.st.moved && !Sync.repoMode); },
+  get on() { return !DEMO && Sync.on && this.st.enabled !== false && !(Sync.st.moved && !Sync.repoMode); },
 
   init() {
     this.load();
-    if (DEMO) return;
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.st.dirty) this.run(); });
     addEventListener('online', () => { if (this.st.dirty) this.run(); });
     // Opened with changes that were never backed up (or never backed up at all): catch up
