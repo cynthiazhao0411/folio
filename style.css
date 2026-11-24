@@ -626,6 +626,11 @@ body.theme-night .sheet-item.danger { color: #ff8a7a; }
 /* ========== Shelf: sub-header, filter chips, card badges ========== */
 .shelf-sub { display: flex; align-items: center; justify-content: space-between; margin: .4em 0 .2em; min-height: 32px; }
 .shelf-sub .shelf-count { margin: 0; }
+/* Phone: 共 N 本 on the first line, 今日已读 on the second, so nothing runs into the buttons */
+@media (max-width: 600px) { .shelf-count .sc-today { display: block; margin-top: .15em; } .shelf-count .sc-today i { display: none; } }
+.shelf-count .sc-today i { font-style: normal; }
+.chips .chip-here { display: inline-flex; align-items: center; gap: .3em; flex: none; padding: 0 .3em; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.chips .chip-here svg { width: 15px; height: 15px; color: var(--accent); }
 .text-btn { background: none; border: none; color: var(--accent); font-size: .9em; padding: .4em .2em; min-height: 36px; }
 .chips { display: flex; gap: .5em; overflow-x: auto; margin: .6em -1.25em 1.2em; padding: 0 1.25em; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
@@ -962,6 +967,7 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 /* Permanent "new folder" chip at the start of the shelf's chip row */
 .chips .chip-n { margin-left: .35em; font-size: .78em; opacity: .55; font-variant-numeric: tabular-nums; }
 .chips button.chip-back { color: var(--muted); }
+.chips .crumb-sep { flex: none; align-self: center; font-style: normal; color: var(--muted); opacity: .6; margin: 0 -.2em; }
 .chips button.drop-on { background: color-mix(in srgb, var(--accent) 18%, var(--card)); border-color: var(--accent); color: var(--fg); transform: scale(1.06); }
 .mode-menu .mm-sep { height: 1px; margin: 5px 8px; background: var(--line); }
 /* Folder tiles (by-folder arrangement): sized like a book cover, a soft panel holding a 2×2 of the covers inside */

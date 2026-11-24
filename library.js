@@ -684,7 +684,7 @@ const Library = {
     // Sub-header: count and today's reading time
     const today = (await DB.allDaily()).filter(r => r.date === new Date().toLocaleDateString('sv')).reduce((n, r) => n + r.ms, 0);
     document.getElementById('shelf-count').innerHTML = this.books.length
-      ? `${cur ? this.path(cur).map(f => esc(f.name)).join(' › ') + ' · ' : ''}共 ${shelfGroup() === 'folders' && (this.filter === 'all' || cur) ? (cur ? this.countIn(cur) : this.books.length) : list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
+      ? `<span>共 ${shelfGroup() === 'folders' && (this.filter === 'all' || cur) ? (cur ? this.countIn(cur) : this.books.length) : list.length} 本</span>${today ? `<span class="sc-today"><i> · </i>今日已读 ${fmtDur(today, true)}</span>` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
     // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
@@ -696,9 +696,10 @@ const Library = {
     const fchip = f => `<button data-filter="f:${esc(f.id)}" data-fid="${esc(f.id)}" class="${this.filter === 'f:' + f.id ? 'on' : ''}">${ICON.folder}${esc(f.name)}<small class="chip-n">${this.countIn(f.id)}</small></button>`;
     const byFolder = shelfGroup() === 'folders';      // by folder: folders are tiles in the grid, not chips
     if (cur) {
-      const f = this.folder(cur), up = f.parent ? this.folder(f.parent) : null;
-      chips.innerHTML = `<button class="chip-back" data-filter="${up ? 'f:' + esc(up.id) : 'all'}" data-up="${up ? esc(up.id) : ''}">‹ ${esc(up ? up.name : '全部')}</button>`
-        + `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>` + (byFolder ? '' : fchip(f) + this.children(cur).map(fchip).join(''));
+      // Breadcrumbs, like a file explorer: ‹ 全部 › 亚内 › 个 — every level is a pill; tap one to jump there
+      chips.innerHTML = `<button class="chip-back" data-filter="all" data-up="">‹ 全部</button>`
+        + this.path(cur).map(x => `<i class="crumb-sep">›</i><button data-filter="f:${esc(x.id)}" data-fid="${esc(x.id)}" class="crumb${x.id === cur ? ' on' : ''}">${esc(x.name)}</button>`).join('')
+        + `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>` + (byFolder ? '' : this.children(cur).map(fchip).join(''));
     } else if (byFolder) {
       chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`;
     } else {
