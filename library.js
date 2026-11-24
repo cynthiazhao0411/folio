@@ -775,24 +775,90 @@ const Library = {
     this.updateSelectBar();
   },
 
+  // ---------- moving between folders ----------
+  // Going into a folder pushes the new level in from the right while the old one slides a little
+  // to the left and fades (the way iOS navigates); going back reverses it; tags and 全部 cross-fade.
+  // Uses View Transitions where the browser has them (Safari 18, Chrome), a plain slide otherwise.
+  async go(filter) {
+    const depth = f => f.startsWith('f:') ? this.path(f.slice(2)).length : 0;
+    const dir = depth(filter) > depth(this.filter) ? 'in' : depth(filter) < depth(this.filter) ? 'out' : 'fade';
+    const swap = async () => {
+      this.filter = filter;
+      scrollTo(0, 0); document.getElementById('shelf').scrollTop = 0;
+      await this.render();
+    };
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return swap();
+    const root = document.documentElement;
+    if (document.startViewTransition) {
+      root.dataset.nav = dir;
+      try { await document.startViewTransition(swap).finished; } catch {}
+      delete root.dataset.nav;
+      return;
+    }
+    await swap();
+    const x = dir === 'in' ? 40 : dir === 'out' ? -40 : 0;
+    ['grid', 'chips'].forEach(id => document.getElementById(id).animate(
+      [{ transform: `translateX(${x}px)`, opacity: 0 }, { transform: 'none', opacity: 1 }],
+      { duration: 380, easing: 'cubic-bezier(.32,.72,0,1)' }));
+  },
+
   // ---------- gestures on the grid ----------
   bind() {
     const grid = document.getElementById('grid');
-    let timer = null, hint = null, pressing = null, pressedAt = 0, x0 = 0, y0 = 0;
+    // Touch: press and hold a book or folder. Let go without moving → its menu (the catalog card,
+    // or the folder's menu). Keep holding and move → it lifts off and can be dropped on a folder
+    // (a selected book in select mode carries the whole selection). Moving before the hold = scroll.
+    let timer = null, hint = null, pressing = null, pressedAt = 0, x0 = 0, y0 = 0, armed = null;
     const unpress = () => { clearTimeout(timer); clearTimeout(hint); pressing?.classList.remove('pressing'); pressing = null; };
+    const ghostAt = (g, x, y) => { g.style.transform = `translate(${x - 30}px, ${y - 64}px)`; };
     grid.addEventListener('touchstart', e => {
       const card = e.target.closest('.card');
-      if (!card || this.selecting) return;
-      unpress();
+      if (!card || e.touches.length > 1) return;
+      unpress(); armed = null;
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
       hint = setTimeout(() => { pressing = card; card.classList.add('pressing'); }, 130);     // the book sinks slightly while you hold
-      timer = setTimeout(() => { pressedAt = Date.now(); card.dataset.fid ? this.folderMenu(card.dataset.fid) : this.openMenu(card.dataset.id); }, 440);
+      timer = setTimeout(() => {
+        navigator.vibrate?.(8);
+        const id = card.dataset.id, fid = card.dataset.fid;
+        armed = { card, what: fid ? { folder: fid } : { books: this.selecting && this.selected.has(id) ? [...this.selected] : [id] } };
+      }, 440);
     }, { passive: true });
     grid.addEventListener('touchmove', e => {
-      if (Math.hypot(e.touches[0].clientX - x0, e.touches[0].clientY - y0) > 8) unpress();
-    }, { passive: true });
-    grid.addEventListener('touchend', unpress, { passive: true });
-    grid.addEventListener('touchcancel', unpress, { passive: true });
+      const t = e.touches[0];
+      if (!armed) { if (Math.hypot(t.clientX - x0, t.clientY - y0) > 8) unpress(); return; }
+      e.preventDefault();                                       // held: the finger now drags, never scrolls
+      if (!armed.ghost) {
+        if (Math.hypot(t.clientX - x0, t.clientY - y0) < 10) return;
+        unpress();
+        const g = armed.ghost = document.createElement('div');
+        g.className = 'drag-ghost';
+        g.innerHTML = armed.what.folder ? `${ICON.folder}<span>${esc(this.folder(armed.what.folder)?.name || '')}</span>`
+          : `${ICON.folder}<span>${armed.what.books.length > 1 ? armed.what.books.length + ' 本' : esc(bookName(this.books.find(b => b.id === armed.what.books[0])?.title || ''))}</span>`;
+        document.body.appendChild(g);
+        armed.card.classList.add('dragging');
+      }
+      ghostAt(armed.ghost, t.clientX, t.clientY);
+      if (t.clientY < 110) scrollBy(0, -16);
+      else if (t.clientY > innerHeight - 90) scrollBy(0, 16);
+      const el = this._dnd.target(t.clientX, t.clientY);
+      this._dnd.mark(el && el !== armed.card ? el : null);
+    }, { passive: false });
+    const release = e => {
+      unpress();
+      const a = armed; armed = null;
+      if (!a) return;
+      pressedAt = Date.now();                                   // swallow the click that follows
+      if (!a.ghost) {                                           // held and let go: the menu
+        if (e.type === 'touchend' && !this.selecting) a.card.dataset.fid ? this.folderMenu(a.card.dataset.fid) : this.openMenu(a.card.dataset.id);
+        return;
+      }
+      a.ghost.remove(); a.card.classList.remove('dragging');
+      const t = e.changedTouches?.[0], el = t && e.type === 'touchend' ? this._dnd.target(t.clientX, t.clientY) : null;
+      this._dnd.mark(null);
+      if (el && el !== a.card) this._dnd.drop(el, a.what, t.clientX);
+    };
+    grid.addEventListener('touchend', release);
+    grid.addEventListener('touchcancel', release);
     // A held finger must never start iOS text selection (blue handles) on the shelf or the card
     document.addEventListener('selectstart', e => {
       const el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
@@ -807,11 +873,7 @@ const Library = {
       if (!card) return;
       if (Date.now() - pressedAt < 700) return;                // the click that ends a long-press
       if (Date.now() - (this._dragEnded || 0) < 600) return;   // the click that ends a drag
-      if (card.dataset.fid) {                                  // a folder tile: go in (also while selecting)
-        this.filter = 'f:' + card.dataset.fid;
-        scrollTo(0, 0); document.getElementById('shelf').scrollTop = 0;
-        return this.render();
-      }
+      if (card.dataset.fid) return this.go('f:' + card.dataset.fid);   // a folder tile: go in (also while selecting)
       if (this.selecting) return this.toggle(card);
       openBook(card.dataset.id);
     });
@@ -836,9 +898,8 @@ const Library = {
         return;
       }
       const b = e.target.closest('[data-filter]');
-      if (!b) return;
-      else this.filter = b.dataset.filter;
-      this.render();
+      if (!b || b.dataset.filter === this.filter) return;
+      this.go(b.dataset.filter);
     };
     this.bindDrag(grid, chips);
     document.getElementById('btn-select').onclick = () => this.enterSelect();
@@ -903,42 +964,7 @@ const Library = {
       drag = null; mark(null);
       if (t && w) drop(t, w, e.clientX);
     });
-    // ---- touch, select mode only
-    let td = null, timer = null, x0 = 0, y0 = 0;
-    const ghostAt = (x, y) => { td.ghost.style.transform = `translate(${x - 30}px, ${y - 70}px)`; };
-    grid.addEventListener('touchstart', e => {
-      const card = e.target.closest('.card');
-      if (!this.selecting || !card || !this.selected.has(card.dataset.id)) return;
-      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        const ghost = document.createElement('div');
-        ghost.className = 'drag-ghost';
-        ghost.innerHTML = `${ICON.folder}<span>${this.selected.size} 本</span>`;
-        document.body.appendChild(ghost);
-        td = { books: [...this.selected], ghost };
-        navigator.vibrate?.(8);
-        ghostAt(x0, y0);
-      }, 320);
-    }, { passive: true });
-    grid.addEventListener('touchmove', e => {
-      const t = e.touches[0];
-      if (!td) { if (Math.hypot(t.clientX - x0, t.clientY - y0) > 8) clearTimeout(timer); return; }
-      e.preventDefault();
-      ghostAt(t.clientX, t.clientY);
-      if (t.clientY < 110) scrollBy(0, -16);
-      mark(target(t.clientX, t.clientY));
-    }, { passive: false });
-    const end = e => {
-      clearTimeout(timer);
-      if (!td) return;
-      const t = e.changedTouches?.[0], w = td, el = t && e.type === 'touchend' ? target(t.clientX, t.clientY) : null;
-      td.ghost.remove(); td = null; mark(null);
-      this._dragEnded = Date.now();
-      if (el) drop(el, w, t.clientX);
-    };
-    grid.addEventListener('touchend', end);
-    grid.addEventListener('touchcancel', end);
+    this._dnd = { target, mark, drop };
   },
 
   // ================= Long-press: the book's catalog card =================

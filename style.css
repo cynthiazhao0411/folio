@@ -972,6 +972,27 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 .fold-box .fold-n { position: absolute; right: 0; bottom: 0; padding: .25em .65em; border-top-left-radius: 10px; background: color-mix(in srgb, var(--accent) 16%, var(--bg)); color: var(--fg); font-size: .7rem; letter-spacing: .02em; }
 .folder-card .progress { display: none; }
 .folder-card.drop-on .fold-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fold-box .cover.fold-j::before { display: none; }                 /* no spine line on the small covers */
+.fold-box .cover.fold-j .c-rule, .fold-box .cover.fold-j .c-author { display: none; }
+.fold-box .cover.fold-j .c-title { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.card.dragging { opacity: .35; transition: opacity .2s; }
+#grid .card { -webkit-touch-callout: none; }
+
+/* Moving between folders (see Library.go): the shelf below the header is pushed / popped */
+#grid { view-transition-name: folio-grid; }
+#chips { view-transition-name: folio-chips; }
+::view-transition-group(folio-grid), ::view-transition-group(folio-chips) { animation-duration: .42s; animation-timing-function: cubic-bezier(.32,.72,0,1); }
+::view-transition-old(folio-grid), ::view-transition-new(folio-grid),
+::view-transition-old(folio-chips), ::view-transition-new(folio-chips) { animation-duration: .42s; animation-timing-function: cubic-bezier(.32,.72,0,1); animation-fill-mode: both; height: 100%; object-fit: none; object-position: top; }
+html[data-nav="in"]::view-transition-old(folio-grid), html[data-nav="in"]::view-transition-old(folio-chips) { animation-name: nav-old-in; }
+html[data-nav="in"]::view-transition-new(folio-grid), html[data-nav="in"]::view-transition-new(folio-chips) { animation-name: nav-new-in; }
+html[data-nav="out"]::view-transition-old(folio-grid), html[data-nav="out"]::view-transition-old(folio-chips) { animation-name: nav-old-out; }
+html[data-nav="out"]::view-transition-new(folio-grid), html[data-nav="out"]::view-transition-new(folio-chips) { animation-name: nav-new-out; }
+@keyframes nav-old-in { to { transform: translateX(-24%); opacity: 0; } }
+@keyframes nav-new-in { from { transform: translateX(100%); } }
+@keyframes nav-old-out { to { transform: translateX(100%); } }
+@keyframes nav-new-out { from { transform: translateX(-24%); opacity: 0; } }
+html[data-nav="out"]::view-transition-old(folio-grid) { z-index: 2; }
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 90; pointer-events: none; display: flex; align-items: center; gap: .35em;
   padding: .45em .8em; border-radius: 999px; background: var(--fg); color: var(--bg); font-size: .85rem; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
 .drag-ghost svg { width: 15px; height: 15px; }
