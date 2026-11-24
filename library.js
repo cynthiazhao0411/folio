@@ -209,6 +209,10 @@ function sortBooks(list) {
 // ledge ends in a gap and no book is left on its own. Captions hang under the ledge like museum
 // labels; a plate wide enough also shows the summary and tags. Only a shelf too small to fill one
 // ledge (one or two books) is shown centred, at the largest size.
+// How the shelf is arranged (this device): every book ('all', folders as chips above), or by folder
+// ('folders': folders shown as tiles among the books, tap one to go in)
+const GROUP_KEY = 'folio-shelf-group';
+const shelfGroup = () => { try { return localStorage.getItem(GROUP_KEY) === 'folders' ? 'folders' : 'all'; } catch { return 'all'; } };
 const WALL_REL = b => { const w = b?.words || 0; return !w ? .9 : w < 30000 ? .8 : w < 100000 ? .9 : 1; };
 const JACKET = 2 / 3;                                     // jacket width : height
 function wallMetrics(width) {
@@ -659,8 +663,10 @@ const Library = {
 
   visible() {
     const f = this.filter;
+    const loose = shelfGroup() === 'folders';             // by folder: the top level shows only books in no folder
     const list = this.books
-      .filter(b => f === 'all' || (f.startsWith('f:') ? b.folderId === f.slice(2) : (b.userTags || []).includes(f.slice(2))));
+      .filter(b => f === 'all' ? !loose || !b.folderId || !this.folder(b.folderId)
+        : f.startsWith('f:') ? b.folderId === f.slice(2) : (b.userTags || []).includes(f.slice(2)));
     return sortBooks(list);
   },
 
@@ -678,7 +684,7 @@ const Library = {
     // Sub-header: count and today's reading time
     const today = (await DB.allDaily()).filter(r => r.date === new Date().toLocaleDateString('sv')).reduce((n, r) => n + r.ms, 0);
     document.getElementById('shelf-count').innerHTML = this.books.length
-      ? `${cur ? this.path(cur).map(f => esc(f.name)).join(' › ') + ' · ' : ''}共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
+      ? `${cur ? this.path(cur).map(f => esc(f.name)).join(' › ') + ' · ' : ''}共 ${shelfGroup() === 'folders' && (this.filter === 'all' || cur) ? (cur ? this.countIn(cur) : this.books.length) : list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
     // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
@@ -688,10 +694,13 @@ const Library = {
     // At the top: new folder · 全部 · the top-level folders. Inside a folder: back · new folder
     // inside · this folder · its folders. Each folder shows how many books are in it (all levels).
     const fchip = f => `<button data-filter="f:${esc(f.id)}" data-fid="${esc(f.id)}" class="${this.filter === 'f:' + f.id ? 'on' : ''}">${ICON.folder}${esc(f.name)}<small class="chip-n">${this.countIn(f.id)}</small></button>`;
+    const byFolder = shelfGroup() === 'folders';      // by folder: folders are tiles in the grid, not chips
     if (cur) {
       const f = this.folder(cur), up = f.parent ? this.folder(f.parent) : null;
       chips.innerHTML = `<button class="chip-back" data-filter="${up ? 'f:' + esc(up.id) : 'all'}" data-up="${up ? esc(up.id) : ''}">‹ ${esc(up ? up.name : '全部')}</button>`
-        + `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>` + fchip(f) + this.children(cur).map(fchip).join('');
+        + `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>` + (byFolder ? '' : fchip(f) + this.children(cur).map(fchip).join(''));
+    } else if (byFolder) {
+      chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`;
     } else {
       const top = this.children(null);
       chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
@@ -719,7 +728,17 @@ const Library = {
     SHELF_MODES.forEach(m => grid.classList.toggle('mode-' + m.key, m.key === mode));
     this.renderModeBtn();
     requestAnimationFrame(() => { fitShelf(); fitTitles(grid); });
-    if (!this.books.length || (!list.length && this.filter === 'all')) {
+    // By folder: this level's folders come first, as tiles (a 2×2 of covers from everything inside)
+    const tiles = byFolder && (this.filter === 'all' || cur) ? this.children(cur).map(f => {
+      const ids = this.under(f.id), n = this.countIn(f.id), subs = this.children(f.id).length;
+      const covers = sortBooks(this.books.filter(b => ids.has(b.folderId))).slice(0, 4);
+      return `
+        <div class="card folder-card" data-fid="${esc(f.id)}"${mode === 'wall' ? ' data-rel=".9"' : ''}>
+          <div class="card-cover"><div class="cover fold-box"><div class="fold-grid">${covers.map(b => jacket(b, 'fold-j')).join('')}</div><span class="fold-n">${n} 本</span></div></div>
+          <div class="card-info"><div class="t">${esc(f.name)}</div><div class="s">${subs ? `${subs} 个文件夹 · ` : ''}${n} 本</div></div>
+        </div>`;
+    }).join('') : '';
+    if (!this.books.length || (!list.length && !tiles && this.filter === 'all')) {
       grid.innerHTML = `
         <div class="empty">
           <div class="empty-art"><span></span><span></span><span></span></div>
@@ -730,8 +749,8 @@ const Library = {
         </div>`;
       return;
     }
-    if (!list.length) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">${cur && this.children(cur).length ? '书都在上面的文件夹里' : '这里还没有书'}</p></div>`; return; }
-    grid.innerHTML = list.map((b, i) => {
+    if (!list.length && !tiles) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">${cur && this.children(cur).length ? '书都在上面的文件夹里' : '这里还没有书'}</p></div>`; return; }
+    grid.innerHTML = tiles + list.map((b, i) => {
       if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
       const st = statusOf(b), pct = b.progress?.pct || 0;
       const sub = st === 'done' ? (b.reads ? `读完 ${b.reads} 遍` : '读完') : st === 'reading' ? Math.max(1, Math.round(pct)) + '%' : '未读';
@@ -767,7 +786,7 @@ const Library = {
       unpress();
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
       hint = setTimeout(() => { pressing = card; card.classList.add('pressing'); }, 130);     // the book sinks slightly while you hold
-      timer = setTimeout(() => { pressedAt = Date.now(); this.openMenu(card.dataset.id); }, 440);
+      timer = setTimeout(() => { pressedAt = Date.now(); card.dataset.fid ? this.folderMenu(card.dataset.fid) : this.openMenu(card.dataset.id); }, 440);
     }, { passive: true });
     grid.addEventListener('touchmove', e => {
       if (Math.hypot(e.touches[0].clientX - x0, e.touches[0].clientY - y0) > 8) unpress();
@@ -781,13 +800,18 @@ const Library = {
     });
     grid.addEventListener('contextmenu', e => {                 // right-click = long-press on desktop
       const card = e.target.closest('.card');
-      if (card && !this.selecting) { e.preventDefault(); this.openMenu(card.dataset.id); }
+      if (card && !this.selecting) { e.preventDefault(); card.dataset.fid ? this.folderMenu(card.dataset.fid) : this.openMenu(card.dataset.id); }
     });
     grid.addEventListener('click', e => {
       const card = e.target.closest('.card');
       if (!card) return;
       if (Date.now() - pressedAt < 700) return;                // the click that ends a long-press
       if (Date.now() - (this._dragEnded || 0) < 600) return;   // the click that ends a drag
+      if (card.dataset.fid) {                                  // a folder tile: go in (also while selecting)
+        this.filter = 'f:' + card.dataset.fid;
+        scrollTo(0, 0); document.getElementById('shelf').scrollTop = 0;
+        return this.render();
+      }
       if (this.selecting) return this.toggle(card);
       openBook(card.dataset.id);
     });
@@ -831,7 +855,7 @@ const Library = {
   // The long-press card, tap-to-open and tap-to-select work as before; on touch, folders are
   // reordered and moved from their own menu (long-press a folder).
   bindDrag(grid, chips) {
-    const target = (x, y) => document.elementFromPoint(x, y)?.closest('#chips [data-fid], #chips .chip-back, #chips [data-filter="all"]') || null;
+    const target = (x, y) => document.elementFromPoint(x, y)?.closest('#chips [data-fid], #chips .chip-back, #chips [data-filter="all"], #grid .folder-card') || null;
     let marked = null;
     const mark = el => { if (marked === el) return; marked?.classList.remove('drop-on'); marked = el; el?.classList.add('drop-on'); };
     const drop = async (el, what, x) => {
@@ -852,6 +876,7 @@ const Library = {
     grid.addEventListener('dragstart', e => {
       const card = e.target.closest('.card');
       if (!card) return;
+      if (card.dataset.fid) { drag = { folder: card.dataset.fid }; e.dataTransfer.setData('text/plain', ' '); return; }
       const id = card.dataset.id;
       drag = { books: this.selecting && this.selected.has(id) ? [...this.selected] : [id] };
       e.dataTransfer.setData('text/plain', ' '); e.dataTransfer.effectAllowed = 'move';
@@ -863,6 +888,13 @@ const Library = {
       e.dataTransfer.setData('text/plain', ' '); e.dataTransfer.effectAllowed = 'move';
     });
     document.addEventListener('dragend', () => { drag = null; mark(null); });
+    grid.addEventListener('dragover', e => { if (!drag) return; const t = target(e.clientX, e.clientY); mark(t); if (t) e.preventDefault(); });
+    grid.addEventListener('drop', e => {
+      const t = target(e.clientX, e.clientY), w = drag;
+      if (!t) return;
+      e.preventDefault(); drag = null; mark(null);
+      if (w) drop(t, w, e.clientX);
+    });
     chips.addEventListener('dragover', e => { if (!drag) return; const t = target(e.clientX, e.clientY); mark(t); if (t) e.preventDefault(); });
     chips.addEventListener('dragleave', e => { if (!chips.contains(e.relatedTarget)) mark(null); });
     chips.addEventListener('drop', e => {
@@ -1265,9 +1297,18 @@ const Library = {
   },
   openModeMenu() {
     const cur = shelfMode();
-    this.popMenu(document.getElementById('btn-mode'), SHELF_MODES.map(m => `<button data-mode="${m.key}" class="${m.key === cur ? 'on' : ''}">${m.icon}<span>${m.name}</span></button>`).join(''), b => {
-      if (b.dataset.mode === cur) return;
-      try { localStorage.setItem(MODE_KEY, b.dataset.mode); } catch {}
+    const grp = shelfGroup();
+    this.popMenu(document.getElementById('btn-mode'), SHELF_MODES.map(m => `<button data-mode="${m.key}" class="${m.key === cur ? 'on' : ''}">${m.icon}<span>${m.name}</span></button>`).join('')
+      + `<div class="mm-sep"></div>`
+      + [['all', '全部书', SHELF_MODES[0].icon], ['folders', '按文件夹', ICON.folder]].map(([k, n, ic]) => `<button data-group="${k}" class="${k === grp ? 'on' : ''}">${ic}<span>${n}</span></button>`).join(''), b => {
+      if (b.dataset.group) {
+        if (b.dataset.group === grp) return;
+        try { localStorage.setItem(GROUP_KEY, b.dataset.group); } catch {}
+        this.filter = 'all';
+      } else {
+        if (b.dataset.mode === cur) return;
+        try { localStorage.setItem(MODE_KEY, b.dataset.mode); } catch {}
+      }
       document.getElementById('shelf').scrollTop = 0; scrollTo(0, 0);
       this.render();
     });
