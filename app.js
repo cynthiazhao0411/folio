@@ -203,7 +203,6 @@ Clock.onFlush = async (bookId, ms) => {
 };
 function celebrate(m) {
   toast(m.reads > 1 ? `读完了 · 这是第 ${m.reads} 遍` : '读完了这本书 ✦');
-  if (!m.rating) setTimeout(() => askRating(m), 1200);
 }
 
 StatsPage.bind();
@@ -278,6 +277,15 @@ Reader.onProgress = p => {
   if (!current) return;
   current.progress = p;
   if (checkFinished(current)) celebrate(current);
+  // The rating prompt waits for the very last page (The End), even though 98% already counts as
+  // read; asked once per read-through (ratePromptedReads)
+  const atEnd = p.atEnd;
+  delete p.atEnd;
+  if (atEnd && current.reads && !current.rating && current.ratePromptedReads !== current.reads) {
+    current.ratePromptedReads = current.reads;
+    const m = current;
+    setTimeout(() => askRating(m), 900);
+  }
   clearTimeout(saveTimer);
   const m = current;                      // the book may be closed before the timer fires
   saveTimer = setTimeout(() => DB.putMeta(m), 400);
@@ -316,7 +324,7 @@ async function importBooks(sources, open = true, onProgress) {
       // Re-importing a book keeps everything you did with it on the shelf
       const keep = {};
       cleanBookTitle(info);                                     // no 【…】 (…) at either end of a title
-      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette', 'cp'])
+      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette', 'cp', 'folderId', 'ratePromptedReads'])
         if (old?.[k] !== undefined) keep[k] = old[k];
       for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
         if (old?.[k] !== undefined) keep[k] = old[k];

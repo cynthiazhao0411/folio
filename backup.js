@@ -68,7 +68,7 @@ const Backup = {
       sessions: (stores.sessions || []).length,
       days: new Set((stores.daily || []).map(d => d.date)).size,
       rated: meta.filter(m => m.rating).length,
-      folders: folders.size,
+      folders: ((stores.prefs || []).find(p => p.key === 'folderTree')?.value || []).length || folders.size,
       tags: tags.size,
     };
   },
@@ -203,7 +203,10 @@ const Backup = {
       if (mode === 'replace') { await DB.replace(name, rows); continue; }
       if (name === 'prefs') {                                    // merge list-valued prefs (folders) instead of replacing them
         const cur = new Map((await DB.dump('prefs')).map(p => [p.key, p.value]));
-        rows = rows.map(p => Array.isArray(p.value) && Array.isArray(cur.get(p.key)) ? { ...p, value: [...new Set([...cur.get(p.key), ...p.value])] } : p);
+        // the folder tree merges by folder id (the backup's version of a folder wins)
+        const byId = (a, b) => [...new Map([...a, ...b].map(f => [f?.id, f])).values()].filter(f => f?.id);
+        rows = rows.map(p => !(Array.isArray(p.value) && Array.isArray(cur.get(p.key))) ? p
+          : { ...p, value: p.key === 'folderTree' ? byId(cur.get(p.key), p.value) : [...new Set([...cur.get(p.key), ...p.value])] });
       }
       await DB.putMany(name, rows);
     }

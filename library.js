@@ -463,7 +463,7 @@ function quickSheet(html, cls = '') {
 
 // ================= Library =================
 const Library = {
-  filter: 'all',            // 'all' | 'f:<folder>' | 't:<tag>'
+  filter: 'all',            // 'all' | 'f:<folder id>' | 't:<tag>'
   books: [],
   selecting: false,
   selected: new Set(),
@@ -476,42 +476,191 @@ const Library = {
     }
     if (rerender) await this.render();
   },
-  // Empty folders made from the shelf are remembered here; a book's own folder name is never touched
-  // Folders created before any book is in them. Kept in the database (prefs 'folders') so they
-  // are synced and backed up; older versions kept them in localStorage and are moved over once.
-  _extra: [],
-  async loadExtraFolders() {
-    let list = await DB.getPref('folders');
-    if (!Array.isArray(list)) {
-      try { list = JSON.parse(localStorage.getItem('folio-folders') || '[]'); } catch { list = []; }
-      await DB.setPref('folders', list.filter(x => x && typeof x === 'string'));
+  // ---------- folders ----------
+  // Folders form a tree, kept in prefs 'folderTree' as [{ id, name, parent, order }] (parent null =
+  // top level), so they are synced and backed up with everything else. A book points to its folder
+  // by m.folderId; the folder's name is still written to m.folder as before, so older versions (and
+  // old backups) keep working. Folders from before the tree (a book's folder name, or an empty
+  // folder in prefs 'folders') become top-level folders with the id 'n:<name>': the same id on every
+  // device, so two devices that upgrade separately still agree after a sync. The repair only adds.
+  _tree: [],
+  async loadTree() {
+    const raw = await DB.getPref('folderTree');
+    const tree = Array.isArray(raw) ? raw.filter(f => f && f.id && typeof f.name === 'string').map(f => ({ ...f })) : [];
+    let changed = !Array.isArray(raw);
+    const byId = new Map(tree.map(f => [f.id, f]));
+    const add = (name, id = 'n:' + name) => {
+      if (!byId.has(id)) { const f = { id, name, parent: null, order: tree.length }; tree.push(f); byId.set(id, f); changed = true; }
+      return byId.get(id);
+    };
+    // A parent that no longer exists, or a loop, puts the folder back at the top level
+    for (const f of tree) {
+      const seen = new Set([f.id]);
+      for (let p = f.parent; p; p = byId.get(p)?.parent) {
+        if (!byId.has(p) || seen.has(p)) { f.parent = null; changed = true; break; }
+        seen.add(p);
+      }
+      if (f.parent === undefined) f.parent = null;
+    }
+    // Empty folders from before the tree (older versions kept them in localStorage first)
+    let extra = await DB.getPref('folders');
+    if (!Array.isArray(extra)) {
+      try { extra = JSON.parse(localStorage.getItem('folio-folders') || '[]'); } catch { extra = []; }
       localStorage.removeItem('folio-folders');
     }
-    this._extra = list.filter(x => x && typeof x === 'string');
+    for (const n of extra) if (n && typeof n === 'string' && !tree.some(f => f.name === n)) add(n);
+    // Books: m.folder (the name) is what older versions write, so it decides. A folderId that is
+    // missing or names another folder is found again by name (an older version moved the book).
+    const fix = [];
+    for (const b of this.books) {
+      const f = b.folderId && byId.get(b.folderId);
+      if (!b.folder) { if (b.folderId) { delete b.folderId; fix.push(b); } continue; }
+      if (f && f.name === b.folder) continue;
+      if (b.folderId && !f) { add(b.folder, b.folderId); continue; }    // its folder record was lost: bring it back
+      const same = tree.filter(x => x.name === b.folder);
+      b.folderId = (same.find(x => !x.parent) || same[0] || add(b.folder)).id;
+      fix.push(b);
+    }
+    this._tree = tree;
+    if (changed) await this.saveTree();
+    for (const b of fix) await DB.putMeta(b);
   },
-  extraFolders() { return [...this._extra]; },
-  saveExtraFolders(list) { this._extra = [...new Set(list)]; DB.setPref('folders', this._extra); },
-  folders() { return [...new Set([...this.books.map(b => b.folder).filter(Boolean), ...this.extraFolders()])].sort((a, b) => a.localeCompare(b, 'zh')); },
-  async createFolder() {
-    const f = await promptDialog({ title: '新建文件夹', placeholder: '文件夹名称', ok: '创建' });
-    if (!f) return null;
-    if (!this.folders().includes(f)) this.saveExtraFolders([...this.extraFolders(), f]);
-    return f;
+  async saveTree() {
+    await DB.setPref('folderTree', this._tree);
+    await DB.setPref('folders', [...new Set(this._tree.map(f => f.name))]);   // for older versions
   },
-  async removeFolder(name) {
-    if (this.books.some(b => b.folder === name)) return toast('文件夹里还有书，先把书移出来再删除');
-    const ok = await confirmDialog({ title: `删除文件夹「${name}」？`, message: '里面没有书，只会删除这个空文件夹。', ok: '删除', danger: true });
-    if (!ok) return;
-    this.saveExtraFolders(this.extraFolders().filter(x => x !== name));
-    if (this.filter === 'f:' + name) this.filter = 'all';
+  folder(id) { return this._tree.find(f => f.id === id); },
+  children(pid = null) {
+    return this._tree.filter(f => (f.parent || null) === pid)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name, 'zh'));
+  },
+  path(id) { const out = []; for (let f = this.folder(id); f; f = this.folder(f.parent)) out.unshift(f); return out; },
+  under(id) {                                            // the folder and everything inside it
+    const out = new Set([id]);
+    for (let grew = true; grew;) { grew = false; for (const f of this._tree) if (out.has(f.parent) && !out.has(f.id)) { out.add(f.id); grew = true; } }
+    return out;
+  },
+  countIn(id) { const ids = this.under(id); return this.books.filter(b => ids.has(b.folderId)).length; },
+  // Tree rows for pickers: every folder, indented by depth
+  treeRows(skip = new Set()) {
+    const rows = [];
+    const walk = (pid, depth) => { for (const f of this.children(pid)) { if (skip.has(f.id)) continue; rows.push({ f, depth }); walk(f.id, depth + 1); } };
+    walk(null, 0);
+    return rows;
+  },
+  currentFolder() { return this.filter.startsWith('f:') ? this.filter.slice(2) : null; },
+  async createFolder(parent = this.currentFolder()) {
+    const p = parent && this.folder(parent);
+    const name = (await promptDialog({ title: p ? `在「${p.name}」里新建文件夹` : '新建文件夹', placeholder: '文件夹名称', ok: '创建', max: 40 }))?.trim();
+    if (!name) return null;
+    const dup = this.children(p ? p.id : null).find(f => f.name === name);
+    if (dup) return dup.id;
+    const sib = this.children(p ? p.id : null);
+    const f = { id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, parent: p ? p.id : null,
+      order: sib.length ? Math.max(...sib.map(x => x.order ?? 0)) + 1 : 0 };
+    this._tree.push(f);
+    await this.saveTree();
+    return f.id;
+  },
+  async renameFolder(id) {
+    const f = this.folder(id);
+    if (!f) return;
+    const name = (await promptDialog({ title: '文件夹改名', value: f.name, placeholder: '文件夹名称', ok: '改名', max: 40 }))?.trim();
+    if (!name || name === f.name) return;
+    f.name = name;
+    await this.saveTree();
+    await this.update(this.books.filter(b => b.folderId === id).map(b => b.id), m => { m.folder = name; }, false);
+    toast(`已改名为「${name}」`);
     await this.render();
+  },
+  // Deleting a folder never deletes books: its books and folders move up one level
+  async removeFolder(id) {
+    const f = this.folder(id);
+    if (!f) return;
+    const books = this.books.filter(b => b.folderId === id), subs = this.children(id);
+    const up = f.parent ? this.folder(f.parent) : null;
+    const where = up ? `「${up.name}」` : '书架最外层';
+    const ok = await confirmDialog({ title: `删除文件夹「${f.name}」？`,
+      message: books.length || subs.length
+        ? `里面的${books.length ? ` ${books.length} 本书` : ''}${books.length && subs.length ? '和' : ''}${subs.length ? ` ${subs.length} 个文件夹` : ''}会移到${where}，书不会被删除。`
+        : '这是一个空文件夹。', ok: '删除', danger: true });
+    if (!ok) return;
+    for (const s of subs) s.parent = f.parent || null;
+    this._tree = this._tree.filter(x => x.id !== id);
+    await this.saveTree();
+    await this.update(books.map(b => b.id), m => { if (up) { m.folderId = up.id; m.folder = up.name; } else { delete m.folderId; delete m.folder; } }, false);
+    if (this.filter === 'f:' + id) this.filter = up ? 'f:' + up.id : 'all';
+    await this.render();
+  },
+  // Move a folder into another one (null = top level), optionally just before a sibling
+  async moveFolder(id, parent, before = null) {
+    const f = this.folder(id);
+    if (!f || (parent && this.under(id).has(parent))) { toast('不能放进它自己里面'); return false; }
+    f.parent = parent || null;
+    const sib = this.children(f.parent).filter(x => x.id !== id);
+    const at = before ? sib.findIndex(x => x.id === before) : -1;
+    sib.splice(at < 0 ? sib.length : at, 0, f);
+    sib.forEach((x, i) => { x.order = i; });
+    await this.saveTree();
+    await this.render();
+    return true;
+  },
+  async moveBooks(ids, fid) {
+    const f = fid && this.folder(fid);
+    await this.update(ids, m => { if (f) { m.folderId = f.id; m.folder = f.name; } else { delete m.folderId; delete m.folder; } });
+    toast(f ? `已移到「${f.name}」` : '已移出文件夹');
+  },
+  // The folder's own menu: long-press (or right-click) a folder chip
+  folderMenu(id) {
+    const f = this.folder(id);
+    if (!f) return;
+    navigator.vibrate?.(8);
+    const sib = this.children(f.parent), i = sib.findIndex(x => x.id === id);
+    const s = quickSheet(`
+      <div class="pk-title">${ICON.folder} ${esc(f.name)}<small>${this.countIn(id)} 本</small></div>
+      <div class="pk-list">
+        <button class="pk-row" data-a="sub">＋ 在里面新建文件夹</button>
+        <button class="pk-row" data-a="rename">改名</button>
+        <button class="pk-row" data-a="move">移到别的文件夹…</button>
+        ${i > 0 ? '<button class="pk-row" data-a="left">往前排</button>' : ''}
+        ${i < sib.length - 1 ? '<button class="pk-row" data-a="right">往后排</button>' : ''}
+        <button class="pk-row muted" data-a="del">删除文件夹（书不会删除）</button>
+      </div>`, 'pk-folders');
+    s.card.onclick = async e => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (!a) return;
+      await s.close();
+      if (a === 'sub') { const nid = await this.createFolder(id); if (nid) { this.filter = 'f:' + id; await this.render(); } }
+      else if (a === 'rename') this.renameFolder(id);
+      else if (a === 'del') this.removeFolder(id);
+      else if (a === 'left') this.moveFolder(id, f.parent, sib[i - 1].id);
+      else if (a === 'right') this.moveFolder(id, f.parent, sib[i + 2]?.id || null);
+      else if (a === 'move') this.pickFolderFor(id);
+    };
+  },
+  pickFolderFor(id) {
+    const f = this.folder(id);
+    const rows = this.treeRows(this.under(id)).map(({ f: x, depth }) =>
+      `<button class="pk-row${f.parent === x.id ? ' on' : ''}" data-f="${esc(x.id)}" style="padding-left:${1 + depth * 1.1}em">${ICON.folder}<span>${esc(x.name)}</span></button>`).join('');
+    const s = quickSheet(`
+      <div class="pk-title">把「${esc(f.name)}」移到</div>
+      <div class="pk-list sheet-scroll">
+        <button class="pk-row${f.parent ? '' : ' on'}" data-f="">书架最外层</button>
+        ${rows}
+      </div>`, 'pk-folders');
+    s.card.onclick = async e => {
+      const row = e.target.closest('.pk-row');
+      if (!row) return;
+      await s.close();
+      if (await this.moveFolder(id, row.dataset.f || null)) toast('已移动');
+    };
   },
   tags() { return [...new Set(this.books.flatMap(b => b.userTags || []))].sort((a, b) => a.localeCompare(b, 'zh')); },
 
   visible() {
     const f = this.filter;
     const list = this.books
-      .filter(b => f === 'all' || (f.startsWith('f:') ? b.folder === f.slice(2) : (b.userTags || []).includes(f.slice(2))));
+      .filter(b => f === 'all' || (f.startsWith('f:') ? b.folderId === f.slice(2) : (b.userTags || []).includes(f.slice(2))));
     return sortBooks(list);
   },
 
@@ -519,24 +668,35 @@ const Library = {
   async render() {
     await balancePalettes();                 // books without a colour yet get one (saved with the book)
     await fixAuthors();                      // one spelling for anonymous works (see importer.js)
-    await this.loadExtraFolders();
     this.books = await DB.allMeta();
-    const folders = this.folders(), tags = this.tags();
-    if (this.filter !== 'all' && !(this.filter.startsWith('f:') ? folders.includes(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';
+    await this.loadTree();
+    const tags = this.tags();
+    if (this.filter !== 'all' && !(this.filter.startsWith('f:') ? this.folder(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';
+    const cur = this.currentFolder();
     const list = this.visible();
 
     // Sub-header: count and today's reading time
     const today = (await DB.allDaily()).filter(r => r.date === new Date().toLocaleDateString('sv')).reduce((n, r) => n + r.ms, 0);
     document.getElementById('shelf-count').innerHTML = this.books.length
-      ? `共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
+      ? `${cur ? this.path(cur).map(f => esc(f.name)).join(' › ') + ' · ' : ''}共 ${list.length} 本${today ? ` · 今日已读 ${fmtDur(today, true)}` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
     // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
     // (long-press) and in the data, and the 't:' filter in visible() is kept for later versions.
     const chips = document.getElementById('chips');
     const chip = (key, label, icon = '') => `<button data-filter="${esc(key)}" class="${this.filter === key ? 'on' : ''}">${icon}${esc(label)}</button>`;
-    chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
-        + (folders.length ? chip('all', '全部') + folders.map(f => chip('f:' + f, f, ICON.folder)).join('') : '');
+    // At the top: new folder · 全部 · the top-level folders. Inside a folder: back · new folder
+    // inside · this folder · its folders. Each folder shows how many books are in it (all levels).
+    const fchip = f => `<button data-filter="f:${esc(f.id)}" data-fid="${esc(f.id)}" class="${this.filter === 'f:' + f.id ? 'on' : ''}">${ICON.folder}${esc(f.name)}<small class="chip-n">${this.countIn(f.id)}</small></button>`;
+    if (cur) {
+      const f = this.folder(cur), up = f.parent ? this.folder(f.parent) : null;
+      chips.innerHTML = `<button class="chip-back" data-filter="${up ? 'f:' + esc(up.id) : 'all'}" data-up="${up ? esc(up.id) : ''}">‹ ${esc(up ? up.name : '全部')}</button>`
+        + `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>` + fchip(f) + this.children(cur).map(fchip).join('');
+    } else {
+      const top = this.children(null);
+      chips.innerHTML = `<button class="chip-new" data-newfolder="1">＋ 新建文件夹</button>`
+        + (top.length ? chip('all', '全部') + top.map(fchip).join('') : '');
+    }
 
     // Continue reading: the book opened most recently (not one already finished)
     const cont = document.getElementById('continue');
@@ -570,7 +730,7 @@ const Library = {
         </div>`;
       return;
     }
-    if (!list.length) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">这里还没有书</p></div>`; return; }
+    if (!list.length) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">${cur && this.children(cur).length ? '书都在上面的文件夹里' : '这里还没有书'}</p></div>`; return; }
     grid.innerHTML = list.map((b, i) => {
       if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
       const st = statusOf(b), pct = b.progress?.pct || 0;
@@ -627,26 +787,28 @@ const Library = {
       const card = e.target.closest('.card');
       if (!card) return;
       if (Date.now() - pressedAt < 700) return;                // the click that ends a long-press
+      if (Date.now() - (this._dragEnded || 0) < 600) return;   // the click that ends a drag
       if (this.selecting) return this.toggle(card);
       openBook(card.dataset.id);
     });
 
-    // Chips: tap to filter; the first one makes a new folder. Press and hold an empty folder to delete it.
+    // Chips: tap a folder to go into it, the back chip to go up a level; ＋ makes a folder in the
+    // current one. Press and hold (or right-click) a folder for its menu: rename, move, delete.
     const chips = document.getElementById('chips');
     let chipTimer = null, chipHeld = 0;
     const holdChip = e => {
-      const b = e.target.closest('[data-filter^="f:"]');
+      const b = e.target.closest('[data-fid]');
       if (!b) return;
-      chipTimer = setTimeout(() => { chipHeld = Date.now(); navigator.vibrate?.(8); this.removeFolder(b.dataset.filter.slice(2)); }, 600);
+      chipTimer = setTimeout(() => { chipHeld = Date.now(); this.folderMenu(b.dataset.fid); }, 600);
     };
     chips.addEventListener('touchstart', holdChip, { passive: true });
     ['touchend', 'touchmove', 'touchcancel'].forEach(t => chips.addEventListener(t, () => clearTimeout(chipTimer), { passive: true }));
-    chips.addEventListener('contextmenu', e => { const b = e.target.closest('[data-filter^="f:"]'); if (b) { e.preventDefault(); this.removeFolder(b.dataset.filter.slice(2)); } });
+    chips.addEventListener('contextmenu', e => { const b = e.target.closest('[data-fid]'); if (b) { e.preventDefault(); this.folderMenu(b.dataset.fid); } });
     chips.onclick = async e => {
       if (Date.now() - chipHeld < 700) return;
       if (e.target.closest('[data-newfolder]')) {
-        const f = await this.createFolder();
-        if (f) { await this.render(); toast(`已新建「${f}」`); chips.querySelector(`[data-filter="${CSS.escape('f:' + f)}"]`)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }
+        const id = await this.createFolder();
+        if (id) { await this.render(); toast(`已新建「${this.folder(id)?.name}」`); chips.querySelector(`[data-fid="${CSS.escape(id)}"]`)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }
         return;
       }
       const b = e.target.closest('[data-filter]');
@@ -654,10 +816,97 @@ const Library = {
       else this.filter = b.dataset.filter;
       this.render();
     };
+    this.bindDrag(grid, chips);
     document.getElementById('btn-select').onclick = () => this.enterSelect();
     document.getElementById('btn-mode').onclick = e => { e.stopPropagation(); this.openModeMenu(); };
     document.getElementById('btn-sort').onclick = e => { e.stopPropagation(); this.openSortMenu(); };
     this.bindSelectBar();
+  },
+
+  // ================= Drag to organise =================
+  // Mouse: drag a book (or the selected books) onto a folder chip to move them in, or onto the back
+  // chip / 全部 to move them up a level or out. Drag a folder chip onto another folder to put it
+  // inside, or onto the left part of one to place it just before it. Touch: in select mode, hold a
+  // selected book for a moment and drag the selection onto a chip (the shelf scrolls up near the top).
+  // The long-press card, tap-to-open and tap-to-select work as before; on touch, folders are
+  // reordered and moved from their own menu (long-press a folder).
+  bindDrag(grid, chips) {
+    const target = (x, y) => document.elementFromPoint(x, y)?.closest('#chips [data-fid], #chips .chip-back, #chips [data-filter="all"]') || null;
+    let marked = null;
+    const mark = el => { if (marked === el) return; marked?.classList.remove('drop-on'); marked = el; el?.classList.add('drop-on'); };
+    const drop = async (el, what, x) => {
+      const fid = el.dataset.fid || (el.classList.contains('chip-back') ? (el.dataset.up || null) : null);
+      if (what.books) { await this.moveBooks(what.books, fid); if (this.selecting) this.exitSelect(); return; }
+      if (!what.folder || el.dataset.fid === what.folder) return;
+      const r = el.getBoundingClientRect(), t = el.dataset.fid && this.folder(el.dataset.fid);
+      if (t && x < r.left + r.width * 0.3 && !el.classList.contains('on')) await this.moveFolder(what.folder, t.parent || null, t.id);
+      else if (await this.moveFolder(what.folder, fid)) toast(fid ? `已放进「${this.folder(fid)?.name}」` : '已移到最外层');
+    };
+    // ---- mouse (HTML drag and drop); draggable is set only for a mouse, so touch long-press is untouched
+    document.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'mouse') return;
+      const el = e.target.closest?.('#grid .card, #chips [data-fid]');
+      if (el) el.draggable = true;
+    }, true);
+    let drag = null;
+    grid.addEventListener('dragstart', e => {
+      const card = e.target.closest('.card');
+      if (!card) return;
+      const id = card.dataset.id;
+      drag = { books: this.selecting && this.selected.has(id) ? [...this.selected] : [id] };
+      e.dataTransfer.setData('text/plain', ' '); e.dataTransfer.effectAllowed = 'move';
+    });
+    chips.addEventListener('dragstart', e => {
+      const b = e.target.closest('[data-fid]');
+      if (!b) return;
+      drag = { folder: b.dataset.fid };
+      e.dataTransfer.setData('text/plain', ' '); e.dataTransfer.effectAllowed = 'move';
+    });
+    document.addEventListener('dragend', () => { drag = null; mark(null); });
+    chips.addEventListener('dragover', e => { if (!drag) return; const t = target(e.clientX, e.clientY); mark(t); if (t) e.preventDefault(); });
+    chips.addEventListener('dragleave', e => { if (!chips.contains(e.relatedTarget)) mark(null); });
+    chips.addEventListener('drop', e => {
+      e.preventDefault();
+      const t = target(e.clientX, e.clientY), w = drag;
+      drag = null; mark(null);
+      if (t && w) drop(t, w, e.clientX);
+    });
+    // ---- touch, select mode only
+    let td = null, timer = null, x0 = 0, y0 = 0;
+    const ghostAt = (x, y) => { td.ghost.style.transform = `translate(${x - 30}px, ${y - 70}px)`; };
+    grid.addEventListener('touchstart', e => {
+      const card = e.target.closest('.card');
+      if (!this.selecting || !card || !this.selected.has(card.dataset.id)) return;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const ghost = document.createElement('div');
+        ghost.className = 'drag-ghost';
+        ghost.innerHTML = `${ICON.folder}<span>${this.selected.size} 本</span>`;
+        document.body.appendChild(ghost);
+        td = { books: [...this.selected], ghost };
+        navigator.vibrate?.(8);
+        ghostAt(x0, y0);
+      }, 320);
+    }, { passive: true });
+    grid.addEventListener('touchmove', e => {
+      const t = e.touches[0];
+      if (!td) { if (Math.hypot(t.clientX - x0, t.clientY - y0) > 8) clearTimeout(timer); return; }
+      e.preventDefault();
+      ghostAt(t.clientX, t.clientY);
+      if (t.clientY < 110) scrollBy(0, -16);
+      mark(target(t.clientX, t.clientY));
+    }, { passive: false });
+    const end = e => {
+      clearTimeout(timer);
+      if (!td) return;
+      const t = e.changedTouches?.[0], w = td, el = t && e.type === 'touchend' ? target(t.clientX, t.clientY) : null;
+      td.ghost.remove(); td = null; mark(null);
+      this._dragEnded = Date.now();
+      if (el) drop(el, w, t.clientX);
+    };
+    grid.addEventListener('touchend', end);
+    grid.addEventListener('touchcancel', end);
   },
 
   // ================= Long-press: the book's catalog card =================
@@ -875,18 +1124,18 @@ const Library = {
     input.click();
   },
 
+  // Move books to any folder at any level (indented tree); ＋ makes a new folder in the one being browsed
   async pickFolder(ids) {
     const metas = await Promise.all(ids.map(id => DB.getMeta(id)));
-    const cur = metas.every(m => m.folder === metas[0].folder) ? metas[0].folder : undefined;
-    const count = f => this.books.filter(b => b.folder === f).length;
-    const rows = this.folders().map(f => `<button class="pk-row${cur === f ? ' on' : ''}" data-f="${esc(f)}">${ICON.folder}<span>${esc(f)}</span><small>${count(f)}</small></button>`).join('');
+    const cur = metas.every(m => m.folderId === metas[0].folderId) ? metas[0].folderId : undefined;
+    const rows = this.treeRows().map(({ f, depth }) => `<button class="pk-row${cur === f.id ? ' on' : ''}" data-f="${esc(f.id)}" style="padding-left:${1 + depth * 1.1}em">${ICON.folder}<span>${esc(f.name)}</span><small>${this.countIn(f.id)}</small></button>`).join('');
     // "New folder" is the first row, so it can never end up below the fold or behind the toolbar
     const s = quickSheet(`
       <div class="pk-title">移动到文件夹<small>已选 ${ids.length} 本</small></div>
       <div class="pk-foot"><button class="pk-row add" data-new="1">＋ 新建文件夹</button></div>
       <div class="pk-list sheet-scroll">
         ${rows || '<div class="pk-empty">还没有文件夹，先新建一个</div>'}
-        ${metas.some(m => m.folder) ? `<button class="pk-row muted" data-f="">移出文件夹</button>` : ''}
+        ${metas.some(m => m.folderId) ? `<button class="pk-row muted" data-f="">移出文件夹</button>` : ''}
       </div>`, 'pk-folders');
     s.card.onclick = async e => {
       const row = e.target.closest('.pk-row');
@@ -896,12 +1145,8 @@ const Library = {
         f = await this.createFolder();
         if (!f) return;
       }
-      // A folder the selection leaves behind stays on the shelf even if it is now empty
-      const left = [...new Set(metas.map(m => m.folder).filter(x => x && x !== f))];
-      if (left.length) this.saveExtraFolders([...this.extraFolders(), ...left]);
       await s.close();
-      await this.update(ids, m => { if (f) m.folder = f; else delete m.folder; });
-      toast(f ? `已移到「${f}」` : '已移出文件夹');
+      await this.moveBooks(ids, f || null);        // a folder left empty stays (folders are their own records)
       this.exitSelect();                           // straight back to the shelf
     };
   },

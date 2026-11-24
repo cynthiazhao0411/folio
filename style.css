@@ -960,6 +960,12 @@ body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-
 .pk-empty { color: var(--muted); text-align: center; padding: 1.2em 0; font-size: .9em; }
 
 /* Permanent "new folder" chip at the start of the shelf's chip row */
+.chips .chip-n { margin-left: .35em; font-size: .78em; opacity: .55; font-variant-numeric: tabular-nums; }
+.chips button.chip-back { color: var(--muted); }
+.chips button.drop-on { background: color-mix(in srgb, var(--accent) 18%, var(--card)); border-color: var(--accent); color: var(--fg); transform: scale(1.06); }
+.drag-ghost { position: fixed; left: 0; top: 0; z-index: 90; pointer-events: none; display: flex; align-items: center; gap: .35em;
+  padding: .45em .8em; border-radius: 999px; background: var(--fg); color: var(--bg); font-size: .85rem; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.drag-ghost svg { width: 15px; height: 15px; }
 .chips button.chip-new { border-style: dashed; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 
 /* Small, consistent press feedback and eased state changes */

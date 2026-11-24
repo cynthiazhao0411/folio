@@ -178,7 +178,7 @@ const Reader = {
       meta.content = ip ? getComputedStyle(ip).getPropertyValue('--c').trim()
                         : getComputedStyle(document.body).getPropertyValue('--bg').trim();
     }
-    this.onProgress?.({ ch: s.ch, frac: s.page / s.pages, pct: s.pct });
+    this.onProgress?.({ ch: s.ch, frac: s.page / s.pages, pct: s.pct, atEnd: !!this.isEnd(this.views[this.top], s.ch, s.page) });
     this.updateScrub();
     // While idle, pre-layout the chapter the next turn is likely to need on the hidden sheet
     clearTimeout(this._pre);
