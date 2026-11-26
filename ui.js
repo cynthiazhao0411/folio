@@ -64,6 +64,7 @@ const bookCP = raw => parseBookTitle(raw).cp;
 const Sheet = {
   open(modal) {
     const card = modal.querySelector('.sheet-card');
+    card.style.height = '';                                         // a tall sheet opens at full height again
     modal.classList.remove('hidden');
     modal.getAnimations().forEach(a => a.cancel());
     card.getAnimations().forEach(a => a.cancel());
@@ -87,16 +88,36 @@ const Sheet = {
   bind(modal, card) {
     modal._bound = true;
     modal.addEventListener('click', e => { if (e.target === modal) this.close(modal); });
-    // Drag down from the grip/header area (or anywhere when the list is scrolled to the top)
-    let y0 = null, dy = 0, scroller = null;
+    // Drag down from the grip/header area (or anywhere when the list is scrolled to the top).
+    // A tall sheet (the contents) is resizable instead: its grip and header pull it up or down and
+    // it stays at the height it is let go (full or about half; pulled very low it closes). The
+    // list inside scrolls as usual; it only moves the sheet when it is already at its top.
+    let y0 = null, dy = 0, scroller = null, h0 = 0, onHead = false;
+    const tall = card.classList.contains('tall');
+    const fullH = () => card._fullH || card.parentElement.clientHeight;   // the CSS height (measured while no height is set)
     card.addEventListener('touchstart', e => {
-      scroller = card.querySelector('.sheet-scroll');
-      const onHead = !scroller || !scroller.contains(e.target) || scroller.scrollTop <= 0;
-      y0 = onHead ? e.touches[0].clientY : null; dy = 0;
+      scroller = card.querySelector('.sheet-scroll:not(.hidden)');
+      onHead = !scroller || !scroller.contains(e.target);
+      const atTop = !scroller || scroller.scrollTop <= 0;
+      y0 = onHead || atTop ? e.touches[0].clientY : null; dy = 0;
+      h0 = card.getBoundingClientRect().height;
+      if (!card.style.height) card._fullH = h0;
+      if (e.target.closest('input, textarea')) y0 = null;            // typing, not dragging
     }, { passive: true });
     card.addEventListener('touchmove', e => {
       if (y0 === null) return;
-      dy = Math.max(0, e.touches[0].clientY - y0);
+      const raw = e.touches[0].clientY - y0;
+      if (tall) {
+        // up: only from the header, or while not yet full height
+        if (raw < 0 && !onHead && h0 >= fullH() - 2) { y0 = null; return; }
+        if (!onHead && raw < 0) return;
+        dy = raw;
+        if (e.cancelable) e.preventDefault();
+        card.getAnimations().forEach(a => a.cancel());
+        card.style.height = Math.max(120, Math.min(fullH(), h0 - raw)) + 'px';
+        return;
+      }
+      dy = Math.max(0, raw);
       if (dy > 0) {
         if (e.cancelable) e.preventDefault();
         card.getAnimations().forEach(a => a.cancel());
@@ -106,6 +127,14 @@ const Sheet = {
     card.addEventListener('touchend', () => {
       if (y0 === null || !dy) return;
       y0 = null;
+      if (tall) {
+        const H = card.parentElement.clientHeight, h = card.getBoundingClientRect().height, full = fullH(), half = Math.round(H * .55);
+        const to = h < H * .32 ? 0 : Math.abs(h - half) < Math.abs(h - full) ? half : full;
+        if (!to) { card.style.height = ''; card.style.transform = ''; return this.close(modal, Math.max(0, h0 - h)); }
+        card.style.height = to === full ? '' : to + 'px';
+        card.animate([{ height: h + 'px' }, { height: to + 'px' }], { duration: 320, easing: EASE_SHEET });
+        return;
+      }
       const from = dy;
       card.style.transform = '';
       if (from > 90) this.close(modal, from);

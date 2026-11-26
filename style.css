@@ -238,7 +238,12 @@ body.theme-night .curl-shadow { background: linear-gradient(to right, rgba(0,0,0
   box-shadow: 0 -10px 40px -10px rgba(0,0,0,.25);
 }
 .sheet-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; min-height: 0; flex: 1; }
-.sheet-card.tall { height: 86%; max-height: none; padding-left: 0; padding-right: 0; }
+.sheet-card.tall { --sheet-gap: calc(env(safe-area-inset-top) + 46px); height: calc(100% - var(--sheet-gap)); max-height: none; padding-left: 0; padding-right: 0; }
+/* the contents sheet: tall enough that only the chapter name above it still shows; its search box
+   sits right at the bottom edge, with just the room the home indicator needs */
+#toc-panel .sheet-card.tall { padding-bottom: 0; }
+.sheet-card.tall .sheet-grip { width: 44px; height: 5px; margin: 0 auto 8px; cursor: grab; touch-action: none; position: relative; }
+.sheet-card.tall .sheet-grip::before { content: ''; position: absolute; inset: -14px -40px; }   /* a bigger target than the line */
 /* A sheet with a form: the text scrolls, the button below it never leaves the screen */
 .sheet-card.form .form-foot { flex: none; padding-top: .6em; }
 .sheet-card.form .sheet-scroll { margin: 0 -.2em; padding: .4em .2em 0; }   /* room for the first note's negative margin */
@@ -1195,7 +1200,7 @@ html[data-nav="out"]::view-transition-old(folio-grid) { z-index: 2; }
 
 /* Search inside the book: the box at the bottom of the contents sheet (Reader.showToc) */
 .sheet-card.tall { display: flex; flex-direction: column; }
-.toc-search { flex: none; display: flex; gap: 8px; align-items: center; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: inherit; }
+.toc-search { flex: none; display: flex; gap: 8px; align-items: center; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: inherit; }
 .toc-search .ts-box { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 10px; border-radius: 12px; background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--muted); }
 .toc-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; color: var(--fg); font: inherit; font-size: 16px; }
 .toc-search input::-webkit-search-cancel-button { display: none; }
@@ -1262,15 +1267,18 @@ html[data-nav="out"]::view-transition-old(folio-grid) { z-index: 2; }
 /* Bottom navigation: a floating capsule; the chosen page is larger and ochre, the others smaller and white */
 .bottom-nav { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) * .55 + 12px); z-index: 30; transform: translateX(-50%);
   display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px;
-  background: color-mix(in srgb, #2b2622 92%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--fg) 90%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   box-shadow: 0 10px 30px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.12); }
 .bottom-nav button { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 14px; border: 0; border-radius: 999px; background: none;
-  color: rgba(255,255,255,.78); font: inherit; font-size: .8em; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  color: color-mix(in srgb, var(--bg) 80%, transparent); font: inherit; font-size: .8em; cursor: pointer; -webkit-tap-highlight-color: transparent;
   transform: scale(.9); transition: transform .45s cubic-bezier(.34,1.56,.64,1), background-color .3s, color .3s, padding .45s cubic-bezier(.34,1.56,.64,1); }
 .bottom-nav button svg { width: 21px; height: 21px; flex: none; }
 .bottom-nav button span { max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0; transition: max-width .45s cubic-bezier(.34,1.56,.64,1), opacity .25s; }
 .bottom-nav button[data-page="shelf"] svg { width: 24px; height: 24px; }
-.bottom-nav button.on { transform: scale(1.08); background: color-mix(in srgb, #b8632f 26%, transparent); color: #e7a36d; padding: 0 16px; }
+.bottom-nav button.on { transform: scale(1.08); background: color-mix(in srgb, var(--accent) 30%, transparent); color: color-mix(in srgb, var(--accent) 55%, var(--bg)); padding: 0 16px; }
+/* The capsule is the page's ink colour, so it flips with the theme: dark on 浅色 / 护眼, light on 深色 */
+body.theme-night .bottom-nav { box-shadow: 0 10px 30px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.3); }
+body.theme-night .bottom-nav button.on { background: color-mix(in srgb, var(--accent) 30%, transparent); color: color-mix(in srgb, var(--accent) 50%, #2a170c); font-weight: 600; }
 .bottom-nav button.on span { max-width: 4em; opacity: 1; }
 .bottom-nav button:active { transform: scale(.86); }
 body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-nav { opacity: 0; pointer-events: none; transform: translate(-50%, 30px); }

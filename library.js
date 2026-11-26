@@ -677,6 +677,7 @@ const Library = {
       else if (a === 'right') this.moveFolder(id, f.parent, sib[i + 2]?.id || null);
       else if (a === 'move') this.pickFolderFor(id);
     };
+    return s;
   },
   pickFolderFor(id) {
     const f = this.folder(id);
@@ -875,9 +876,10 @@ const Library = {
   // ---------- gestures on the grid ----------
   bind() {
     const grid = document.getElementById('grid');
-    // Touch: press and hold a book or folder. Let go without moving → its menu (the catalog card,
-    // or the folder's menu). Keep holding and move → it lifts off and can be dropped on a folder
-    // (a selected book in select mode carries the whole selection). Moving before the hold = scroll.
+    // Touch: press and hold a book or folder → its menu comes up right away (the catalog card, or the
+    // folder's menu). Keep holding and move the finger → the menu goes away and the book lifts off
+    // to be dropped on a folder (a selected book in select mode carries the whole selection; in
+    // select mode the hold shows no menu). Moving before the hold = scrolling.
     let timer = null, hint = null, pressing = null, pressedAt = 0, x0 = 0, y0 = 0, armed = null;
     const unpress = () => { clearTimeout(timer); clearTimeout(hint); pressing?.classList.remove('pressing'); pressing = null; };
     const ghostAt = (g, x, y) => { g.style.transform = `translate(${x - 30}px, ${y - 64}px)`; };
@@ -891,6 +893,8 @@ const Library = {
         navigator.vibrate?.(8);
         const id = card.dataset.id, fid = card.dataset.fid;
         armed = { card, what: fid ? { folder: fid } : { books: this.selecting && this.selected.has(id) ? [...this.selected] : [id] } };
+        pressedAt = Date.now();
+        if (!this.selecting) armed.menu = fid ? this.folderMenu(fid) : (this.openMenu(id), 'card');
       }, 440);
     }, { passive: true });
     grid.addEventListener('touchmove', e => {
@@ -898,8 +902,10 @@ const Library = {
       if (!armed) { if (Math.hypot(t.clientX - x0, t.clientY - y0) > 8) unpress(); return; }
       e.preventDefault();                                       // held: the finger now drags, never scrolls
       if (!armed.ghost) {
-        if (Math.hypot(t.clientX - x0, t.clientY - y0) < 10) return;
+        if (Math.hypot(t.clientX - x0, t.clientY - y0) < 14) return;
         unpress();
+        if (armed.menu === 'card') document.querySelector('.bookcard-wrap')?._close?.();   // the menu goes, the drag begins
+        else armed.menu?.close?.();
         const g = armed.ghost = document.createElement('div');
         g.className = 'drag-ghost';
         g.innerHTML = armed.what.folder ? `${ICON.folder}<span>${esc(this.folder(armed.what.folder)?.name || '')}</span>`
@@ -918,10 +924,7 @@ const Library = {
       const a = armed; armed = null;
       if (!a) return;
       pressedAt = Date.now();                                   // swallow the click that follows
-      if (!a.ghost) {                                           // held and let go: the menu
-        if (e.type === 'touchend' && !this.selecting) a.card.dataset.fid ? this.folderMenu(a.card.dataset.fid) : this.openMenu(a.card.dataset.id);
-        return;
-      }
+      if (!a.ghost) return;                                     // held and let go: the menu is already up
       a.ghost.remove(); a.card.classList.remove('dragging');
       const t = e.changedTouches?.[0], el = t && e.type === 'touchend' ? this._dnd.target(t.clientX, t.clientY) : null;
       this._dnd.mark(null);
@@ -1135,7 +1138,10 @@ const Library = {
       { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)' });
 
     const openedAt = Date.now();
-    const close = async (from = 0) => {
+    // A drag that starts from the hold puts the card back without redrawing the shelf: the finger's
+    // touch belongs to the book element, which must stay in place for the drag to go on
+    root._close = () => close(0, true);
+    const close = async (from = 0, quiet = false) => {
       if (root._closing) return;
       root._closing = true;
       cov.style.transform = ''; cov.style.boxShadow = '';
@@ -1145,7 +1151,7 @@ const Library = {
       ]);
       setTimeout(() => { cov.style.transition = ''; }, 400);
       root.remove();
-      this.render();
+      if (!quiet) this.render();
       // Marked 读完 on the card but left without rating: ask once more
       if (root._markedDone && !b.rating) { const m = await DB.getMeta(id); if (m && !m.rating) askRating(m); }
     };
