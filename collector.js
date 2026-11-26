@@ -282,7 +282,8 @@
   }
   // One notification per batch: a repository_dispatch event; the repository's workflow
   // (folio-push.yml) sends it to every device that turned notifications on (push/subscription*.json)
-  async function notifyBatch(ok, failed, titles, last) {
+  // updated: how many of the ok works were already on the shelf (an update, not a new book)
+  async function notifyBatch(ok, failed, titles, last, updated = 0) {
     if (!CFG.repo || !ok || blocked) return;
     if (last) await markArrival(last).catch(() => {});
     try {
@@ -291,10 +292,10 @@
         headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' } });
       if (!has.ok || !(await has.json()).some?.(f => /^subscription[^/]*\.json$/.test(f.name))) return;
       await send(API + '/dispatches', { method: 'POST', signal: t.signal, headers: { Authorization: 'Bearer ' + CFG.token, Accept: 'application/vnd.github+json' },
-        body: JSON.stringify({ event_type: 'folio-collected', client_payload: { ok, failed, titles: titles.slice(0, 3), last: last || null, at: Date.now() } }) });
+        body: JSON.stringify({ event_type: 'folio-collected', client_payload: { ok, failed, updated, titles: titles.slice(0, 3), last: last || null, at: Date.now() } }) });
     } catch { /* no notification this time; the works are in the inbox all the same */ }
   }
-  function finish(n, extra = '') {
+  function finish(n, extra = '', updated = 0) {
     progress(0, 0);
     if (held.length) {
       say(`已抓好 ${held.length} 篇，但没能连到 GitHub（网络不稳，或这个网站不让页面连出去）。\n网络恢复后再点一次书签就能接着送；也可以点「复制」，再去 Folio 里「粘贴剪贴板里的作品」。${extra}`);
@@ -309,7 +310,10 @@
       // Sent is not shelved: Folio takes the works in when it opens (and opens the last one, within 15 minutes)
       const how = IOS ? '切回主屏幕的 Folio，会马上收进书架，并打开最后一本。'
         : open ? '点「打开 Folio」，会马上收进书架，并打开最后一本。' : '打开 Folio 时会收进书架，并打开最后一本。';
-      say(n ? `已送出 ✓ 共 ${n} 篇\n${how}${extra}` : '没有需要送的作品。' + extra);
+      // New books and updates of books already on the shelf are told apart
+      const what = updated >= n ? `${n} 本更新` : updated ? `${n - updated} 本新书、${updated} 本更新` : `${n} 本新书`;
+      const how2 = updated >= n ? how.replace('收进书架，并打开最后一本', '更新书架上的书') : how;
+      say(n ? `已送出 ✓ ${what}\n${how2}${extra}` : '没有需要送的作品。' + extra);
       buttons(open || [['好', () => window.__folio.close(), true]]);
     }
   }
@@ -319,9 +323,10 @@
     keepAwake(true);
     buttons([]);
     const total = job.ids.length;
-    let sent = 0;
+    let sent = 0, updated = 0;
     const arrived = [];
     lastArrived = null;
+    const onShelf = new Set((await readShelf().catch(() => [])).map(b => String(b.w)));   // already on the shelf = an update
     for (const id of job.ids) {
       if (job.done.includes(id)) continue;
       const n = job.done.length + Object.keys(job.failed).length + 1;
@@ -334,7 +339,7 @@
       try {
         const work = await fetchWork(id);
         say(`正在抓取 ${Math.min(n, total)} / ${total}` + hint, shortTitle(work.title));
-        if (await deliver(work)) { job.done.push(id); sent++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: bareTitle(work.title) }; }
+        if (await deliver(work)) { job.done.push(id); sent++; if (onShelf.has(String(id))) updated++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: bareTitle(work.title) }; }
         delete job.failed[id];
       } catch (e) {
         job.failed[id] = e.message;
@@ -348,9 +353,9 @@
     const already = total - sent - failed.length - held.length;
     // This batch: every work now in the inbox (also those an interrupted earlier run delivered), and
     // every work that did not get there (could not be fetched, or held because GitHub was unreachable)
-    await notifyBatch(job.done.length, failed.length + held.length, arrived, lastArrived);
+    await notifyBatch(job.done.length, failed.length + held.length, arrived, lastArrived, updated);
     finish(sent, (already > 0 ? `\n（其中 ${already} 篇之前已经送过）` : '')
-      + (failed.length ? `\n${failed.length} 篇失败：${job.failed[failed[0]]}。再点一次书签可以重试。` : ''));
+      + (failed.length ? `\n${failed.length} 篇失败：${job.failed[failed[0]]}。再点一次书签可以重试。` : ''), updated);
   }
 
   // ---------- update check ----------

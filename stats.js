@@ -136,6 +136,7 @@ const StatsPage = {
   // bookId: show one book's statistics instead of the whole library
   async open(bookId) {
     let [daily, metas] = await Promise.all([DB.allDaily(), DB.allMeta()]);
+    metas = metas.filter(m => !m.trashedAt);                          // books in the trash are left out
     this.bookId = bookId || null;
     if (bookId) {
       daily = daily.filter(r => r.bookId === bookId);

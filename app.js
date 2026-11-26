@@ -69,6 +69,7 @@ async function openBook(id, fromCover, atCover) {
     const content = await DB.getContent(id);
     meta.lastReadAt = Date.now();
     delete meta.newChapters;                                   // the new-chapter badge is cleared once seen
+    delete meta.isNew;                                         // and so is the 新 mark of a newly collected book
     current = meta;
     DB.putMeta(meta);
     Reader.setAnnots(await DB.notesFor(id));                  // bookmarks, highlights, notes
@@ -324,7 +325,7 @@ async function importBooks(sources, open = true, onProgress) {
       // Re-importing a book keeps everything you did with it on the shelf
       const keep = {};
       cleanBookTitle(info);                                     // no 【…】 (…) at either end of a title
-      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette', 'cp', 'folderId', 'ratePromptedReads'])
+      for (const k of ['readMs', 'reads', 'run', 'finished', 'readThroughs', 'cover', 'coverColor', 'pinned', 'folder', 'userTags', 'rating', 'status', 'hidden', 'renamed', 'palette', 'cp', 'folderId', 'ratePromptedReads', 'isNew'])
         if (old?.[k] !== undefined) keep[k] = old[k];
       for (const k of ['ratings', 'reviews', 'versions', 'newChapters'])
         if (old?.[k] !== undefined) keep[k] = old[k];
@@ -346,6 +347,7 @@ async function importBooks(sources, open = true, onProgress) {
         words,
         est: estimateBook(chapters),
         addedAt: old?.addedAt || Date.now(),
+        ...(old ? {} : { isNew: true }),                     // the 新 mark, until the book is first opened
         lastReadAt: old?.lastReadAt,
         progress: old?.progress,
       });
@@ -370,7 +372,7 @@ async function importBooks(sources, open = true, onProgress) {
 // "新增 2 本 · 更新 1 本 · 3 本已在书架（没有变化）"
 const importSummary = r => {
   const parts = [];
-  if (r.added) parts.push(`新增 ${r.added} 本`);
+  if (r.added) parts.push(`${r.added} 本新书`);
   if (r.updated - (r.same || 0) > 0) parts.push(`更新 ${r.updated - (r.same || 0)} 本`);
   if (r.same) parts.push(`${r.same} 本已在书架（没有变化）`);
   return parts.join(' · ') || '没有新书';
@@ -484,6 +486,7 @@ async function importFromClipboard() {
 // ================= Reader menu =================
 document.getElementById('btn-back').onclick = closeBook;
 document.getElementById('btn-toc').onclick = () => Reader.showToc();
+document.getElementById('btn-find').onclick = () => Reader.showToc('toc', true);     // 🔍: the contents sheet with its search box ready
 document.getElementById('btn-bookmark').onclick = () => Reader.toggleBookmark();
 // Paper colour: one tap on the shelf (bottom corner) or in the reader's bottom bar
 function nextTheme() {
@@ -499,11 +502,25 @@ function setFont(d) {
   settings.font = Math.min(28, Math.max(14, settings.font + d));
   applySettings();
   Reader.relayout();
+  fontNow();
 }
+// A: the panel with text size and 简体 / 原文 opens above the toolbar; tapping A again, or the
+// page, closes it (it also closes with the toolbar)
+const typePanel = document.getElementById('type-panel');
+const fontNow = () => { document.getElementById('font-size-now').textContent = settings.font; };
+document.getElementById('btn-type').onclick = e => {
+  e.stopPropagation();
+  fontNow(); t2sLabel();
+  typePanel.classList.toggle('hidden');
+  document.getElementById('btn-type').classList.toggle('on', !typePanel.classList.contains('hidden'));
+};
+new MutationObserver(() => {                                   // the toolbar went away: so does the panel
+  if (!document.getElementById('reader').classList.contains('menu-open')) { typePanel.classList.add('hidden'); document.getElementById('btn-type').classList.remove('on'); }
+}).observe(document.getElementById('reader'), { attributes: true, attributeFilter: ['class'] });
 document.getElementById('btn-smaller').onclick = () => setFont(-1);
 document.getElementById('btn-bigger').onclick = () => setFont(+1);
 // 简 / 原文: show a traditional-script book in simplified characters (remembered per book)
-const t2sLabel = () => { document.querySelector('#btn-t2s span').textContent = Reader.t2s ? '简体' : '原文'; };
+const t2sLabel = () => { document.getElementById('btn-t2s').innerHTML = `<span class="${Reader.t2s ? 'on' : ''}">简体</span><span class="${Reader.t2s ? '' : 'on'}">原文</span>`; };
 document.getElementById('btn-t2s').onclick = () => {
   if (!current) return;
   current.t2s = !Reader.t2s;
@@ -583,7 +600,7 @@ async function takePendingOpen() {
 // in the reader is closed first (its place is saved as on any close).
 let arriving = false;
 async function findArrived({ id, title }) {
-  const all = await DB.allMeta(), bare = cleanTitle(title).title;
+  const all = (await DB.allMeta()).filter(m => !m.trashedAt), bare = cleanTitle(title).title;
   const b = /^\d+$/.test(id) ? all.find(m => (m.source || '').match(/\/works\/(\d+)/)?.[1] === id)
     : title ? all.filter(m => m.title === title || m.title === bare || bookName(m.title) === bare).sort((x, y) => (y.addedAt || 0) - (x.addedAt || 0))[0] : null;
   return b || null;
@@ -684,6 +701,8 @@ document.getElementById('btn-more').onclick = async () => {
   Sheet.open(moreSheet);
 };
 document.getElementById('btn-sync').onclick = async () => { await Sheet.close(moreSheet); Sync.openPanel(); };
+document.getElementById('btn-tags').onclick = async () => { await Sheet.close(moreSheet); Library.openTags(); };
+document.getElementById('btn-trash').onclick = async () => { await Sheet.close(moreSheet); Library.openTrash(); };
 document.getElementById('btn-more-close').onclick = () => Sheet.close(moreSheet);
 
 // Desktop browsers (Chrome, Edge, Safari) also expose the Web Share API, but sharing a file there needs
@@ -814,7 +833,21 @@ async function cleanTitles() {
     if (changed.length) { await DB.putMany('meta', changed); DB.onWrite?.('meta'); }
   } catch (e) { console.warn('titles:', e); }
 }
-cleanTitles().finally(renderShelf);
+// ---------- bottom navigation: 足迹 · 书架 · 摘录 ----------
+// The chosen page grows and turns ochre, the other two shrink back (a springy transition). The
+// bar hides in the reader and while choosing books.
+const PAGES = { shelf: 'shelf', foot: 'page-foot', clip: 'page-clip' };
+let page = 'shelf';
+function showPage(p) {
+  if (p === page) { if (p === 'shelf') scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  page = p;
+  for (const [k, id] of Object.entries(PAGES)) document.getElementById(id).classList.toggle('hidden', k !== p);
+  document.querySelectorAll('#bottom-nav [data-page]').forEach(b => b.classList.toggle('on', b.dataset.page === p));
+  scrollTo(0, 0);
+}
+document.getElementById('bottom-nav').onclick = e => { const b = e.target.closest('[data-page]'); if (b) showPage(b.dataset.page); };
+
+Library.purgeTrash().catch(() => {}).finally(() => cleanTitles()).finally(renderShelf);     // books 30 days in the trash are deleted for good
 Sync.init();
 CloudBackup.init();
 

@@ -274,6 +274,23 @@ Object.assign(Reader, {
     }, 350);
   },
 
+  // A search result just jumped to: its words light up for a moment (CSS Custom Highlight, where
+  // the browser has it — Safari 17.2+, Chrome; elsewhere the jump alone)
+  flashFind(off, len) {
+    if (!window.Highlight || !CSS.highlights) return;
+    setTimeout(() => {
+      try {
+        const v = this.views[this.top], a = this.locate(v.idx, off), b = this.locate(v.idx, off + len);
+        if (!a || !b) return;
+        const r = document.createRange();
+        r.setStart(a.node, a.offset); r.setEnd(b.node, b.offset);
+        CSS.highlights.set('folio-find', new Highlight(r));
+        clearTimeout(this._findT);
+        this._findT = setTimeout(() => CSS.highlights.delete('folio-find'), 2600);
+      } catch { /* nothing to light up */ }
+    }, 120);
+  },
+
   // ================= Selection =================
   // Selection is per character (punctuation included). When it starts, the visible page's
   // character boxes are measured once and cached; dragging is then plain arithmetic with

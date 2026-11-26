@@ -48,6 +48,9 @@ const Reader = {
   },
 
   open(book, progress) {
+    try { if (this.views?.length) this.resetCurl(); } catch {}          // a fresh book never inherits a half-turned page
+    this._dragging = false;
+    this._plain = [];                                              // chapter texts for searching, made on first search
     this.book = book;
     // Precompute chapter offsets for the overall progress percentage
     let sum = 0;
@@ -209,9 +212,28 @@ const Reader = {
 
   turn(dir, y) {
     if (this.sel) this.clearSel();
+    this.unstick();
     if (this.busy || !this.canStep(dir)) return;
-    if (this.turnMode === 'curl') this.finishCurl(this.beginCurl(dir, y), true, true);
-    else this.slide(dir);
+    if (this.turnMode === 'curl') {
+      let c;
+      try { c = this.beginCurl(dir, y); } catch (e) { console.error(e); return this.resetCurl(); }
+      this.finishCurl(c, true, true);
+    } else this.slide(dir);
+  },
+
+  // A turn must never be able to freeze the reader (a dropped touch on a busy phone, an error while
+  // laying out a page, an animation frame that never came): lay every sheet flat and start over.
+  resetCurl() {
+    cancelAnimationFrame(this._curlRaf);
+    const s = this.el.shadow;
+    s.style.display = 'none'; s.style.opacity = 0;
+    if (this.backV) { this.backV.el.style.visibility = ''; this.backV.el.style.clipPath = ''; this.backV.el.style.transform = ''; }
+    this.stackOrder();
+    this.busy = false; this._busyAt = 0;
+  },
+  // Busy for longer than any turn can take, with no finger on the page: it got stuck
+  unstick() {
+    if (this.busy && !this._dragging && this._busyAt && performance.now() - this._busyAt > 1500) this.resetCurl();
   },
   next(y) { this.turn(+1, y); },
   prev(y) { this.turn(-1, y); },
@@ -266,7 +288,7 @@ const Reader = {
   // dir: +1 forward, -1 backward. y: height of the point that is lifted (taps and drags start
   // where the finger is); near the top or bottom the corner itself is lifted.
   beginCurl(dir, y) {
-    this.busy = true;
+    this.busy = true; this._busyAt = performance.now();
     const W = this.W(), H = this.el.stack.clientHeight;
     const oldV = this.views[this.top], newV = this.views[1 - this.top];
     const [ch, page] = this.target(dir);
@@ -288,6 +310,13 @@ const Reader = {
   constrain(c, [x, y]) {
     const { W, H, cy } = c;
     const fit = (ax, ay, R) => { const dx = x - ax, dy = y - ay, d = Math.hypot(dx, dy); if (d > R) { x = ax + dx * R / d; y = ay + dy * R / d; } };
+    // Lifted from the middle of the edge (not a corner): the paper turns sideways, it can't be
+    // pulled up or down until the fold lies across the page and the whole sheet flips over the
+    // top or bottom. The point may drift only a little vertically (about 17° of fold at most).
+    if (cy !== 0 && cy !== H) {
+      const lim = Math.min(H * .12, Math.max(0, W - x) * .3);
+      y = Math.max(cy - lim, Math.min(cy + lim, y));
+    }
     fit(0, cy, W);
     if (cy === 0 || cy === H) fit(0, H - cy, Math.hypot(W, H));
     return [Math.min(x, W), y];
@@ -343,20 +372,26 @@ const Reader = {
       : t => 1 - Math.pow(1 - t, 3);
     const arc = fromTap ? (c.cy === c.H ? -1 : c.cy === 0 ? 1 : 0) * c.H * .1 : 0;
     const t0 = performance.now();
+    this._busyAt = t0 + dur;                                         // stuck = well past the planned end
     const tick = now => {
-      const t = Math.min(1, (now - t0) / dur), e = ease(t);
-      this.drawCurl(c, [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e + arc * Math.sin(Math.PI * t)]);
-      if (t < 1) return requestAnimationFrame(tick);
-      c.back.el.style.visibility = ''; this.el.shadow.style.display = 'none';
-      c.back.el.style.clipPath = c.moving.el.style.clipPath = '';
-      if (complete) {
-        this.top = this.views.indexOf(c.newV);
-        this.commit(c.dest);
-      }
-      this.stackOrder();
-      this.busy = false;
+      try {
+        const t = Math.min(1, (now - t0) / dur), e = ease(t);
+        this.drawCurl(c, [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e + arc * Math.sin(Math.PI * t)]);
+        if (t < 1) { this._curlRaf = requestAnimationFrame(tick); return; }
+        c.back.el.style.visibility = ''; this.el.shadow.style.display = 'none';
+        c.back.el.style.clipPath = c.moving.el.style.clipPath = '';
+        if (complete) {
+          this.top = this.views.indexOf(c.newV);
+          this.commit(c.dest);
+        }
+        this.stackOrder();
+        this.busy = false; this._busyAt = 0;
+      } catch (e) { console.error(e); this.resetCurl(); }
     };
-    requestAnimationFrame(tick);
+    this._curlRaf = requestAnimationFrame(tick);
+    // If the phone drops animation frames (busy, or the app went to the background), still finish
+    clearTimeout(this._curlGuard);
+    this._curlGuard = setTimeout(() => { if (this.busy && !this._dragging) { const go = complete; this.resetCurl(); if (go) { this.top = this.views.indexOf(c.newV); try { this.commit(c.dest); } catch (e) { console.error(e); } this.stackOrder(); } } }, dur + 1200);
   },
 
   // ================= Gestures =================
@@ -369,9 +404,12 @@ const Reader = {
     // Drawing waits for the next animation frame; the last 100 ms give the speed at release.
     let raf = 0, track = [];
     const startCurl = (dir, x, y) => {
+      this.unstick();
       if (this.turnMode !== 'curl' || this.busy || !this.canStep(dir)) return null;
       const top = this.el.stack.getBoundingClientRect().top;
-      const c = this.beginCurl(dir, y - top);
+      let c;
+      try { c = this.beginCurl(dir, y - top); } catch (e) { console.error(e); this.resetCurl(); return null; }
+      this._dragging = true;
       c.start = [x, y]; c.base = [...c.p]; c.kx = dir > 0 ? 1 : 2;
       track = [[performance.now(), x]];
       return c;
@@ -385,6 +423,7 @@ const Reader = {
     };
     const endCurl = c => {
       cancelAnimationFrame(raf); raf = 0;
+      this._dragging = false;
       if (c.want) this.drawCurl(c, c.want);
       const [t0, x0] = track[0], [t1, x1] = track[track.length - 1];
       const vx = t1 > t0 ? (x1 - x0) / (t1 - t0) : 0;                 // px per ms, + = rightwards
@@ -396,6 +435,7 @@ const Reader = {
 
     let grab = null;          // a drag that started next to a selection handle moves that end
     area.addEventListener('touchstart', e => {
+      if (drag) { try { endCurl(drag); } catch { this.resetCurl(); } }   // the last drag never got its touchend
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
       moved = decided = pulling = false; drag = null;
       clearTimeout(press);
@@ -490,6 +530,15 @@ const Reader = {
       } else if (moved && this.turnMode !== 'curl' && Math.abs(dx) > 30) {
         dx < 0 ? this.next() : this.prev();
       }
+    });
+
+    // iOS cancels touches when the phone is busy or a system gesture takes over: let the page go
+    // exactly as if the finger had been lifted, so it is never left half turned
+    area.addEventListener('touchcancel', () => {
+      clearTimeout(press);
+      if (grab) { grab = null; return this.endMove(); }
+      if (pulling) { pulling = false; return this.pullEnd(); }
+      if (drag) { try { endCurl(drag); } catch { this.resetCurl(); } drag = null; }
     });
 
     area.addEventListener('click', e => {
@@ -612,7 +661,19 @@ const Reader = {
 
   estText(ms) { return ms < 60000 ? '不到 1 分钟' : '约 ' + fmtDur(ms, true); },
 
-  showToc(tab = 'toc') {
+  // Search this chapter or the whole book: [{ ch, off, len }]
+  searchBook(q, scope = 'book', max = 500) {
+    const out = [], len = q.trim().length;
+    const chs = scope === 'ch' ? [this.ch] : this.book.chapters.map((_, i) => i);
+    for (const ch of chs) {
+      const t = this._plain[ch] ??= chapterPlain(this.book.chapters[ch].html);
+      for (const off of findAll(t, q, max - out.length)) out.push({ ch, off, len });
+      if (out.length >= max) break;
+    }
+    return out;
+  },
+
+  showToc(tab = 'toc', find = false) {
     const b = this.book, modal = this.el.toc;
     const pct = (this.pct || 0).toFixed(1);
     const words = this.wordCount >= 10000 ? (this.wordCount / 10000).toFixed(2) + ' 万字' : this.wordCount + ' 字';
@@ -666,6 +727,12 @@ const Reader = {
         <div class="sheet-scroll toc-list" data-pane="toc">${tocList}</div>
         <div class="sheet-scroll note-list hidden" data-pane="bm">${bmList}</div>
         <div class="sheet-scroll note-list hidden" data-pane="notes">${noteList}</div>
+        <div class="sheet-scroll toc-results hidden" data-pane="search"></div>
+        <div class="toc-search">
+          <label class="ts-box"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input type="search" placeholder="搜索本书" autocomplete="off" enterkeyhint="search"><button class="ts-clear hidden" aria-label="清除">×</button></label>
+          <div class="ts-scope"><button data-scope="ch">本章</button><button data-scope="book" class="on">本书</button></div>
+        </div>
       </div>`;
     this.closeMenu();
     Sheet.open(modal);
@@ -679,9 +746,40 @@ const Reader = {
     if (cur && tab === 'toc') list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.offsetHeight / 2;
 
     modal.querySelector('.sheet-x').onclick = () => Sheet.close(modal);
+    // Search at the bottom: 本章 / 本书; results take the list's place, tap one to go there
+    const sIn = modal.querySelector('.toc-search input'), sRes = modal.querySelector('[data-pane="search"]'), sClr = modal.querySelector('.ts-clear');
+    let scope = 'book', sTimer = 0, before = tab;
+    const runSearch = () => {
+      const q = sIn.value.trim();
+      sClr.classList.toggle('hidden', !q);
+      if (!q) { setTab(before); return; }
+      if (sRes.classList.contains('hidden')) before = modal.querySelector('.sheet-tabs .on')?.dataset.tab || before;
+      const hits = this.searchBook(q, scope);
+      const T = s => this.t2s ? toSimplified(s) : s;
+      sRes.innerHTML = `<div class="sr-count">${scope === 'ch' ? '本章' : '本书'} ${hits.length >= 500 ? '500+' : hits.length} 处</div>`
+        + (hits.length ? hits.map(h => `<a href="#" class="sr" data-ch="${h.ch}" data-off="${h.off}" data-len="${h.len}">
+            ${scope === 'book' ? `<small>${escapeHtml(T(b.chapters[h.ch].title))}</small>` : ''}<span>${T(findSnippet(this._plain[h.ch], h.off, h.len))}</span></a>`).join('')
+          : `<div class="list-empty">没有找到「${escapeHtml(q)}」${scope === 'ch' ? '<br><small>试试搜本书</small>' : ''}</div>`);
+      modal.querySelectorAll('[data-tab]').forEach(x => x.classList.remove('on'));
+      modal.querySelectorAll('[data-pane]').forEach(x => x.classList.toggle('hidden', x !== sRes));
+      sRes.scrollTop = 0;
+    };
+    sIn.oninput = () => { clearTimeout(sTimer); sTimer = setTimeout(runSearch, 180); };
+    if (find) sIn.focus();                                  // opened from 🔍: type straight away (keyboard comes up)
+    sIn.onkeydown = e => { if (e.key === 'Enter') { clearTimeout(sTimer); runSearch(); sIn.blur(); } };
+    sClr.onclick = e => { e.preventDefault(); sIn.value = ''; runSearch(); sIn.focus(); };
+    modal.querySelector('.ts-scope').onclick = e => {
+      const s2 = e.target.closest('[data-scope]');
+      if (!s2) return;
+      scope = s2.dataset.scope;
+      modal.querySelectorAll('[data-scope]').forEach(x => x.classList.toggle('on', x === s2));
+      sIn.placeholder = scope === 'ch' ? '搜索本章' : '搜索本书';
+      if (sIn.value.trim()) runSearch();
+    };
     modal.querySelector('.sheet-tabs').onclick = e => {
       const t = e.target.closest('[data-tab]');
       if (!t) return;
+      before = t.dataset.tab;
       setTab(t.dataset.tab);
       if (t.dataset.tab === 'toc' && cur) list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.offsetHeight / 2;
     };
@@ -713,12 +811,52 @@ const Reader = {
       const a = e.target.closest('[data-ch]');
       if (!a) return;
       e.preventDefault();
-      if (a.dataset.off !== undefined) this.goTo(+a.dataset.ch, +a.dataset.off, a.dataset.id);
+      if (a.dataset.len) { this.goTo(+a.dataset.ch, +a.dataset.off); this.flashFind(+a.dataset.off, +a.dataset.len); }
+      else if (a.dataset.off !== undefined) this.goTo(+a.dataset.ch, +a.dataset.off, a.dataset.id);
       else this.goChapter(+a.dataset.ch);
       Sheet.close(modal);
     });
   },
 };
+
+// ---------- searching text (in a book, and across the shelf) ----------
+// Every character is normalised on its own — traditional → simplified, full-width → half-width,
+// lower case — and keeps its length, so a match in the normalised text sits at exactly the same
+// offsets in the original (the offsets highlights and bookmarks use).
+function normChar(c) {
+  const n = toSimplified(c).normalize('NFKC').toLowerCase();
+  return n.length === c.length ? n : c;
+}
+function normText(s) {
+  // Fast path for whole texts: each step maps character for character
+  let o = toSimplified(s).replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ');
+  const lo = o.toLowerCase();
+  if (lo.length === o.length) return lo;
+  o = ''; for (const c of s) o += normChar(c);                       // a rare letter changed length: one by one
+  return o;
+}
+// A chapter's text exactly as the reader indexes it (the text of the cleaned chapter body)
+function chapterPlain(html) {
+  const d = document.createElement('div');
+  d.innerHTML = clean(html || '');
+  const w = document.createTreeWalker(d, NodeFilter.SHOW_TEXT);
+  let t = '';
+  for (let n; (n = w.nextNode());) t += n.data;
+  return t;
+}
+// Offsets of q in text (both raw); at most `max`
+function findAll(text, q, max = 500, norm = normText(text)) {
+  const k = normText(q.trim()), out = [];
+  if (!k) return out;
+  for (let i = norm.indexOf(k); i >= 0 && out.length < max; i = norm.indexOf(k, i + k.length)) out.push(i);
+  return out;
+}
+// A line of context around a match, the match in bold
+function findSnippet(text, off, len, before = 16, after = 34) {
+  const a = Math.max(0, off - before), b = Math.min(text.length, off + len + after);
+  const tidy = s => escapeHtml(s.replace(/\s+/g, ' '));
+  return (a > 0 ? '…' : '') + tidy(text.slice(a, off)) + '<b>' + tidy(text.slice(off, off + len)) + '</b>' + tidy(text.slice(off + len, b)) + (b < text.length ? '…' : '');
+}
 
 // Strip inline styles, alignment and empty paragraphs so the reader's typography applies
 // ---------- Traditional → Simplified ----------
@@ -752,5 +890,10 @@ function clean(html) {
   box.querySelectorAll('p').forEach(p => {
     if (!p.textContent.trim() && !p.querySelector('img')) p.remove();
   });
+  // Non-breaking spaces between words (common in pasted English) glue a whole sentence into one
+  // unbreakable run: it overflows the page into the next one and stretches the line before it.
+  // Make them ordinary spaces; leading ones (indentation, spacer lines) stay.
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode());) if (n.data.includes('\u00a0')) n.data = n.data.replace(/([^\s\u00a0])\u00a0+/g, '$1 ');
   return box.innerHTML;
 }

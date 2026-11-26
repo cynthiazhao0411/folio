@@ -20,13 +20,15 @@ const ev = (() => { try { return JSON.parse(process.env.EVENT || '{}') || {}; } 
 const ok = Math.max(0, Math.floor(+ev.ok || 0)), failed = Math.max(0, Math.floor(+ev.failed || 0));
 const titles = (Array.isArray(ev.titles) ? ev.titles : []).map(t => String(t).trim().slice(0, 24)).filter(Boolean).slice(0, 3);
 const manual = !('ok' in ev);
+// New books and updates of books already on the shelf are told apart (older bookmarks send no count: all new)
+const upd = Math.min(ok, Math.max(0, Math.floor(+ev.updated || 0)));
+const what = upd >= ok ? `${ok} 本书有更新` : upd ? `收到 ${ok - upd} 本新书，更新 ${upd} 本` : `${ok} 本新书已送到`;
 if (!manual && !ok) { console.log('Nothing arrived in this batch: no notification.'); process.exit(0); }
 const names = titles.length ? titles.slice(0, 2).join('、') + (ok > 2 && titles.length ? ' 等' : '') : '';
 const notification = manual
   ? { title: 'Folio 测试通知', body: '收书通知工作正常。点开会打开 Folio。' }
-  : failed
-    ? { title: `送到 ${ok} 本，失败 ${failed} 本`, body: `${names ? `${names}。` : ''}点开收进书架。失败的作品，再点一次收书书签可以重试。` }
-    : { title: `${ok} 本新书已送到`, body: `${names ? `${names}。` : ''}点开收进书架并打开。` };
+  : { title: what + (failed ? `，失败 ${failed} 本` : ''),
+      body: `${names ? `${names}。` : ''}${upd >= ok ? '点开更新书架。' : '点开收进书架并打开。'}${failed ? '失败的作品，再点一次收书书签可以重试。' : ''}` };
 // Tapping it opens Folio on the last work that arrived (Folio falls back to the shelf if it cannot find it)
 const last = ev.last && typeof ev.last === 'object' ? ev.last : null;
 const lastId = String(last?.id || '').replace(/[^\w-]/g, '').slice(0, 40);

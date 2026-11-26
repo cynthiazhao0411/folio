@@ -3,6 +3,7 @@
 //
 // Per-book fields managed here (all on the book's meta record):
 //   pinned (timestamp) · folder (name) · userTags [] · rating 0–5 · status 'unread'|'reading'|'done'
+//   trashedAt (timestamp): in the trash (回收站); everything else about the book is kept as it was
 //   hidden (bool, no longer used: every book shows on the shelf) · renamed (bool, so a re-import keeps the custom title)
 
 // ================= Jackets =================
@@ -68,6 +69,41 @@ async function balancePalettes() {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // The book's own metadata, matched loosely by name
+// ---------- searching the shelf (书目搜索) ----------
+// Simplified and traditional match each other, and case and full-/half-width don't matter
+// (Ａｂｃ = abc). Looked in: title, author, CP, characters, your tags and the book's own tags.
+const searchKey = s => toSimplified(String(s || '').normalize('NFKC')).toLowerCase().replace(/\s+/g, ' ').trim();
+function matchBook(b, q) {
+  if (!b._sk) Object.defineProperty(b, '_sk', { value: searchKey([
+    b.title, bookName(b.title), ...(b.authors || []), b.cp, ...(b.titleTags || []), ...(b.userTags || []),
+    ...Object.values(b.tags || {}).flat(),
+  ].filter(Boolean).join('\n')), enumerable: false });
+  return searchKey(q).split(' ').every(w => b._sk.includes(w));
+}
+// ---------- filters (筛选) ----------
+// Conditions stack: within one kind any value matches (OR), across kinds all must match (AND).
+//   cat 作品分类 · cp · ch 角色 · tag (your tags) · end 完结/连载 · len 短篇/中篇/长篇 ·
+//   read 未读/在读/读完 · rate 'none' | minimum stars · folder (id, its sub-folders included)
+// A combination can be saved as 我的筛选 (prefs 'savedFilters': synced and backed up).
+const GROUP_RE = { cat: /^fan|作品|原作|series/i, cp: /relationship|pairing|配对|\bcp\b/i, ch: /character|角色|人物/i };
+const lenOf = b => !b.words ? '' : b.words < 30000 ? '短篇' : b.words < 100000 ? '中篇' : '长篇';
+const filterCount = f => !f ? 0 : ['cat', 'cp', 'ch', 'tag', 'end', 'len', 'read'].reduce((n, k) => n + (f[k]?.length ? 1 : 0), 0) + (f.rate ? 1 : 0) + (f.folder ? 1 : 0);
+function bookValues(b, k) {
+  if (k === 'cp') return [...new Set([...metaGroup(b, GROUP_RE.cp), ...(b.cp ? [b.cp] : [])])];
+  if (k === 'cat' || k === 'ch') return metaGroup(b, GROUP_RE[k]);
+  if (k === 'tag') return b.userTags || [];
+  return [];
+}
+function passFilter(b, f, under) {
+  const any = (k, vals) => !f[k]?.length || f[k].some(v => vals.includes(v));
+  if (!any('cat', bookValues(b, 'cat')) || !any('cp', bookValues(b, 'cp')) || !any('ch', bookValues(b, 'ch')) || !any('tag', bookValues(b, 'tag'))) return false;
+  if (f.end?.length && !f.end.some(v => systemTags(b).includes(v))) return false;
+  if (f.len?.length && !f.len.includes(lenOf(b))) return false;
+  if (f.read?.length && !f.read.includes(statusOf(b))) return false;
+  if (f.rate === 'none' ? b.rating : f.rate && (b.rating || 0) < f.rate) return false;
+  if (f.folder && !under.has(b.folderId)) return false;
+  return true;
+}
 const metaGroup = (b, re) => { const k = Object.keys(b.tags || {}).find(k => re.test(k)); return k ? b.tags[k].filter(Boolean) : []; };
 function coverSubtitle(b) {
   return metaGroup(b, /relationship|pairing|配对|\bcp\b/i)[0] || b.authors.join('、') || '';
@@ -659,13 +695,21 @@ const Library = {
       if (await this.moveFolder(id, row.dataset.f || null)) toast('已移动');
     };
   },
-  tags() { return [...new Set(this.books.flatMap(b => b.userTags || []))].sort((a, b) => a.localeCompare(b, 'zh')); },
+  // Your own tags: those on books, plus tags made in 标签管理 that no book has yet (prefs 'extraTags')
+  _extraTags: [],
+  tags() { return [...new Set([...this.books.flatMap(b => b.userTags || []), ...this._extraTags])].sort((a, b) => a.localeCompare(b, 'zh')); },
 
   visible() {
     const f = this.filter;
     const loose = shelfGroup() === 'folders';             // by folder: the top level shows only books in no folder
+    if (this.query) return sortBooks(this.books.filter(b => matchBook(b, this.query)));   // searching: the whole shelf
+    if (filterCount(this.flt)) {                                       // filtering: the whole shelf, flat
+      const under = this.flt.folder ? this.under(this.flt.folder) : null;
+      return sortBooks(this.books.filter(b => passFilter(b, this.flt, under)));
+    }
     const list = this.books
       .filter(b => f === 'all' ? !loose || !b.folderId || !this.folder(b.folderId)
+        : f === 'new' ? b.isNew
         : f.startsWith('f:') ? b.folderId === f.slice(2) : (b.userTags || []).includes(f.slice(2)));
     return sortBooks(list);
   },
@@ -674,17 +718,21 @@ const Library = {
   async render() {
     await balancePalettes();                 // books without a colour yet get one (saved with the book)
     await fixAuthors();                      // one spelling for anonymous works (see importer.js)
-    this.books = await DB.allMeta();
+    this.books = (await DB.allMeta()).filter(b => !b.trashedAt);        // the trash is shown only in 回收站
+    { const x = await DB.getPref('savedFilters'); this._savedFilters = Array.isArray(x) ? x : []; }
+    if (this.flt?.folder && !this._tree.length) await this.loadTree();
+    { const x = await DB.getPref('extraTags'); this._extraTags = Array.isArray(x) ? x : []; }
     await this.loadTree();
     const tags = this.tags();
-    if (this.filter !== 'all' && !(this.filter.startsWith('f:') ? this.folder(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';
+    if (this.filter === 'new' && !this.books.some(b => b.isNew)) this.filter = 'all';
+    if (this.filter !== 'all' && this.filter !== 'new' && !(this.filter.startsWith('f:') ? this.folder(this.filter.slice(2)) : tags.includes(this.filter.slice(2)))) this.filter = 'all';
     const cur = this.currentFolder();
     const list = this.visible();
 
     // Sub-header: count and today's reading time
     const today = (await DB.allDaily()).filter(r => r.date === new Date().toLocaleDateString('sv')).reduce((n, r) => n + r.ms, 0);
     document.getElementById('shelf-count').innerHTML = this.books.length
-      ? `<span>共 ${shelfGroup() === 'folders' && (this.filter === 'all' || cur) ? (cur ? this.countIn(cur) : this.books.length) : list.length} 本</span>${today ? `<span class="sc-today"><i> · </i>今日已读 ${fmtDur(today, true)}</span>` : ''}` : '';
+      ? this.query ? `<span>找到 ${list.length} 本</span>` : filterCount(this.flt) ? `<span>筛选出 ${list.length} 本</span>` : `<span>共 ${shelfGroup() === 'folders' && (this.filter === 'all' || cur) ? (cur ? this.countIn(cur) : this.books.length) : list.length} 本</span>${today ? `<span class="sc-today"><i> · </i>今日已读 ${fmtDur(today, true)}</span>` : ''}` : '';
     document.getElementById('btn-select').classList.toggle('hidden', !list.length);
 
     // Filter chips: all · folders. Tags are not shown on the shelf; they stay on the book card
@@ -695,7 +743,14 @@ const Library = {
     // inside · this folder · its folders. Each folder shows how many books are in it (all levels).
     const fchip = f => `<button data-filter="f:${esc(f.id)}" data-fid="${esc(f.id)}" class="${this.filter === 'f:' + f.id ? 'on' : ''}">${ICON.folder}${esc(f.name)}<small class="chip-n">${this.countIn(f.id)}</small></button>`;
     const byFolder = shelfGroup() === 'folders';      // by folder: folders are tiles in the grid, not chips
-    if (cur) {
+    if (this.query) {
+      chips.innerHTML = '';
+    } else if (filterCount(this.flt)) {
+      const saved = this._savedFilters.find(x => JSON.stringify(x.f) === JSON.stringify(this.flt));
+      chips.innerHTML = `<button class="chip-back" data-clearfilter="1">✕ 清除筛选</button><button class="crumb on" data-openfilter="1">${saved ? esc(saved.name) : `筛选 · ${filterCount(this.flt)} 项`}</button>`;
+    } else if (this.filter === 'new') {
+      chips.innerHTML = `<button class="chip-back" data-filter="all" data-up="">‹ 全部</button><i class="crumb-sep">›</i><button class="crumb on" data-filter="new">新书</button>`;
+    } else if (cur) {
       // Breadcrumbs, like a file explorer: ‹ 全部 › 亚内 › 个 — every level is a pill; tap one to jump there
       chips.innerHTML = `<button class="chip-back" data-filter="all" data-up="">‹ 全部</button>`
         + this.path(cur).map(x => `<i class="crumb-sep">›</i><button data-filter="f:${esc(x.id)}" data-fid="${esc(x.id)}" class="crumb${x.id === cur ? ' on' : ''}">${esc(x.name)}</button>`).join('')
@@ -709,6 +764,18 @@ const Library = {
     }
 
     // Continue reading: the book opened most recently (not one already finished)
+    // Newly collected books not opened yet: a slim banner leads straight to them (× hides it until
+    // the next new book arrives); each of them also wears a 新书 mark until it is first opened
+    const fresh = this.books.filter(b => b.isNew).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    const nb = document.getElementById('new-arrivals'), key = fresh.map(b => b.id).join();
+    let gone = ''; try { gone = localStorage.getItem('folio-new-dismissed') || ''; } catch {}
+    const showNew = fresh.length && !this.selecting && this.filter !== 'new' && gone !== key;
+    nb.classList.toggle('hidden', !showNew);
+    if (showNew) {
+      nb.innerHTML = `<button class="na-go"><span class="na-dot"></span><span class="na-text">${fresh.length > 1 ? `新收到 ${fresh.length} 本书` : `新收到《${esc(bookName(fresh[0].title))}》`}</span><span class="na-sub">${fresh.length > 1 ? esc(fresh.slice(0, 3).map(b => bookName(b.title)).join('、')) + (fresh.length > 3 ? ' 等' : '') : '还没打开'}</span><span class="na-arrow">${fresh.length > 1 ? '看看 ›' : '打开 ›'}</span></button><button class="na-x" aria-label="不再提示">×</button>`;
+      nb.querySelector('.na-go').onclick = () => fresh.length > 1 ? this.go('new') : openBook(fresh[0].id, null, true);
+      nb.querySelector('.na-x').onclick = () => { try { localStorage.setItem('folio-new-dismissed', key); } catch {} nb.classList.add('hidden'); };
+    }
     const cont = document.getElementById('continue');
     let last = !this.selecting && this.books
       .filter(b => b.lastReadAt && statusOf(b) !== 'done')
@@ -730,15 +797,16 @@ const Library = {
     this.renderModeBtn();
     requestAnimationFrame(() => { fitShelf(); fitTitles(grid); });
     // By folder: this level's folders come first, as tiles (a 2×2 of covers from everything inside)
-    const tiles = byFolder && (this.filter === 'all' || cur) ? this.children(cur).map(f => {
+    const tiles = byFolder && !this.query && !filterCount(this.flt) && (this.filter === 'all' || cur) ? this.children(cur).map(f => {
       const ids = this.under(f.id), n = this.countIn(f.id), subs = this.children(f.id).length;
       const covers = sortBooks(this.books.filter(b => ids.has(b.folderId))).slice(0, 4);
       return `
         <div class="card folder-card" data-fid="${esc(f.id)}"${mode === 'wall' ? ' data-rel=".9"' : ''}>
-          <div class="card-cover"><div class="cover fold-box"><div class="fold-grid">${covers.map(b => jacket(b, 'fold-j')).join('')}</div><span class="fold-n">${n} 本</span></div></div>
+          <div class="card-cover"><div class="cover fold-box"><div class="fold-grid">${covers.map(b => jacket(b, 'fold-j')).join('')}</div><span class="fold-n">${n} 本</span>${this.books.some(b => b.isNew && ids.has(b.folderId)) ? '<span class="fold-new">新</span>' : ''}</div></div>
           <div class="card-info"><div class="t">${esc(f.name)}</div><div class="s">${subs ? `${subs} 个文件夹 · ` : ''}${n} 本</div></div>
         </div>`;
     }).join('') : '';
+    if (this.query && this.searchMode !== 'books' && this.books.length) return this.renderFind(grid);
     if (!this.books.length || (!list.length && !tiles && this.filter === 'all')) {
       grid.innerHTML = `
         <div class="empty">
@@ -750,6 +818,7 @@ const Library = {
         </div>`;
       return;
     }
+    if (!list.length && this.query) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">没有找到「${esc(this.query)}」</p></div>`; return; }
     if (!list.length && !tiles) { grid.innerHTML = `<div class="empty small"><p class="empty-sub">${cur && this.children(cur).length ? '书都在上面的文件夹里' : '这里还没有书'}</p></div>`; return; }
     grid.innerHTML = tiles + list.map((b, i) => {
       if (b.t2s) b = { ...b, title: toSimplified(b.title) };     // traditional books shown in simplified
@@ -760,7 +829,7 @@ const Library = {
           <div class="card-cover">
             ${jacket(b)}
             ${b.pinned ? `<span class="pin-badge">${ICON.pin}</span>` : ''}
-            ${b.newChapters ? `<span class="new-badge">新 +${b.newChapters} 章</span>` : ''}
+            ${b.newChapters ? `<span class="new-badge">新 +${b.newChapters} 章</span>` : b.isNew ? '<span class="new-badge fresh">新书</span>' : ''}
             <span class="pick"></span>
           </div>
           <div class="card-info">
@@ -898,14 +967,33 @@ const Library = {
         if (id) { await this.render(); toast(`已新建「${this.folder(id)?.name}」`); chips.querySelector(`[data-fid="${CSS.escape(id)}"]`)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' }); }
         return;
       }
+      if (e.target.closest('[data-clearfilter]')) { this.flt = null; return this.render(); }
+      if (e.target.closest('[data-openfilter]')) return this.openFilter();
       const b = e.target.closest('[data-filter]');
       if (!b || b.dataset.filter === this.filter) return;
       this.go(b.dataset.filter);
     };
     this.bindDrag(grid, chips);
+    // Search: the 🔍 at the top right opens a box over the shelf; typing filters the whole shelf
+    const sbar = document.getElementById('search-bar'), sin = document.getElementById('search-input');
+    let st = 0;
+    document.getElementById('btn-search').onclick = () => { sbar.classList.remove('hidden'); sin.focus(); };
+    const hints = { books: '书名、作者、CP、角色、标签', text: '在所有书的正文里搜索', notes: '搜索高亮、批注和书签备注' };
+    sin.oninput = () => { clearTimeout(st); st = setTimeout(() => { this.query = sin.value.trim(); this.render(); }, this.searchMode === 'books' ? 120 : 350); };
+    sbar.querySelector('.search-modes').onclick = e => {
+      const b = e.target.closest('[data-mode]');
+      if (!b || b.dataset.mode === this.searchMode) return;
+      this.searchMode = b.dataset.mode;
+      sbar.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b));
+      sin.placeholder = hints[this.searchMode];
+      this.render(); sin.focus();
+    };
+    document.getElementById('search-cancel').onclick = () => { sin.value = ''; this.query = ''; sbar.classList.add('hidden'); this.render(); };
+    sin.onkeydown = e => { if (e.key === 'Escape') document.getElementById('search-cancel').click(); if (e.key === 'Enter') sin.blur(); };
     document.getElementById('btn-select').onclick = () => this.enterSelect();
     document.getElementById('btn-mode').onclick = e => { e.stopPropagation(); this.openModeMenu(); };
     document.getElementById('btn-sort').onclick = e => { e.stopPropagation(); this.openSortMenu(); };
+    document.getElementById('btn-filter').onclick = e => { e.stopPropagation(); this.openFilter(); };
     this.bindSelectBar();
   },
 
@@ -1154,17 +1242,276 @@ const Library = {
         break;
       }
       case 'delete': {
+        // Deleting puts the book in the trash: nothing is removed until it is deleted there for good
         const ok = await confirmDialog({
           title: ids.length > 1 ? `删除 ${ids.length} 本书？` : `删除《${bookName(one.title)}》？`,
-          message: '书籍、阅读进度、书签和笔记都会被删除，无法恢复。', ok: '删除', danger: true });
+          message: '会移到回收站，30 天内可以在「更多 → 回收站」恢复，阅读进度、书签、笔记和评分都会保留。', ok: '删除', danger: true });
         if (!ok) return false;
-        for (const id of ids) await DB.remove(id);
-        await this.render();
-        toast('已删除');
+        const at = Date.now();
+        await this.update(ids, m => { m.trashedAt = at; });
+        toast(ids.length > 1 ? `已移到回收站（${ids.length} 本）` : '已移到回收站');
         break;
       }
     }
     return true;
+  },
+
+  // ---------- the filter panel (筛选) ----------
+  // A sheet made for the phone: 我的筛选 on top, then each kind of condition as chips (values that
+  // exist on the shelf, most used first, with counts). The button at the bottom shows how many books
+  // the current choice leaves; it applies the filter. 存为我的筛选 keeps the combination.
+  flt: null,
+  _savedFilters: [],
+  openFilter() {
+    let f = JSON.parse(JSON.stringify(this.flt || {}));
+    const books = this.books;
+    const tally = k => {
+      const m = new Map();
+      for (const b of books) for (const v of bookValues(b, k)) m.set(v, (m.get(v) || 0) + 1);
+      return [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'));
+    };
+    const groups = [
+      ['read', '阅读状态', [['unread', '未读'], ['reading', '在读'], ['done', '读完']]],
+      ['end', '完结 / 连载', [['完结', '完结'], ['连载', '连载']]],
+      ['len', '篇幅', [['短篇', '短篇'], ['中篇', '中篇'], ['长篇', '长篇']]],
+      ['cat', '作品分类', tally('cat')], ['cp', 'CP', tally('cp')], ['ch', '角色', tally('ch')], ['tag', '我的标签', tally('tag')],
+    ];
+    const s = quickSheet(`<div class="pk-title">筛选<small class="fl-n"></small></div><div class="sheet-scroll fl-body"></div>
+      <div class="fl-foot"><button class="fl-clear">清除</button><button class="fl-save">存为我的筛选</button><button class="fl-go"></button></div>`, 'fl-sheet');
+    const body = s.card.querySelector('.fl-body');
+    const count = () => { const under = f.folder ? this.under(f.folder) : null; return books.filter(b => passFilter(b, f, under)).length; };
+    const chip = (k, v, label, n) => `<button class="fl-chip${(f[k] || []).includes(v) ? ' on' : ''}" data-k="${k}" data-v="${esc(v)}">${esc(label)}${n !== undefined ? `<small>${n}</small>` : ''}</button>`;
+    const draw = () => {
+      const open = new Set([...body.querySelectorAll('.fl-more.open')].map(x => x.dataset.k));
+      body.innerHTML = (this._savedFilters.length ? `<div class="fl-sec"><div class="fl-h">我的筛选</div><div class="fl-chips">${this._savedFilters.map(x =>
+          `<span class="fl-saved${JSON.stringify(x.f) === JSON.stringify(f) ? ' on' : ''}" data-sid="${esc(x.id)}"><button data-use="${esc(x.id)}">${esc(x.name)}</button><button class="fl-x" data-drop="${esc(x.id)}" aria-label="删除">×</button></span>`).join('')}</div></div>` : '')
+        + groups.map(([k, title, vals]) => {
+            if (!vals.length) return '';
+            const many = vals.length > 12 && !open.has(k);
+            const shown = many ? vals.slice(0, 12).concat(vals.slice(12).filter(([v]) => (f[k] || []).includes(v))) : vals;
+            return `<div class="fl-sec"><div class="fl-h">${title}</div><div class="fl-chips">${shown.map(([v, n]) => typeof n === 'number' ? chip(k, v, v, n) : chip(k, v, n)).join('')}
+              ${many ? `<button class="fl-more" data-k="${k}">更多 ${vals.length - 12} 个</button>` : open.has(k) ? `<button class="fl-more open" data-k="${k}" hidden></button>` : ''}</div></div>`;
+          }).join('')
+        + `<div class="fl-sec"><div class="fl-h">评分</div><div class="fl-chips">${[['', '不限'], ['3', '3 星以上'], ['4', '4 星以上'], ['5', '5 星'], ['none', '未评分']].map(([v, l]) =>
+            `<button class="fl-chip${String(f.rate || '') === v ? ' on' : ''}" data-rate="${v}">${l}</button>`).join('')}</div></div>`
+        + `<div class="fl-sec"><div class="fl-h">文件夹<small>（含里面的文件夹）</small></div><div class="fl-chips">${[`<button class="fl-chip${f.folder ? '' : ' on'}" data-folder="">不限</button>`,
+            ...this.treeRows().map(({ f: x, depth }) => `<button class="fl-chip${f.folder === x.id ? ' on' : ''}" data-folder="${esc(x.id)}">${'· '.repeat(depth)}${esc(x.name)}</button>`)].join('')}</div></div>`;
+      const n = count(), k = filterCount(f);
+      s.card.querySelector('.fl-n').textContent = k ? `${k} 项条件` : '';
+      s.card.querySelector('.fl-go').textContent = k ? `显示 ${n} 本` : '显示全部';
+      s.card.querySelector('.fl-save').disabled = !k;
+    };
+    draw();
+    s.card.onclick = async e => {
+      const t = e.target.closest('button');
+      if (!t) return;
+      if (t.classList.contains('fl-chip') && t.dataset.k) {
+        const arr = f[t.dataset.k] = f[t.dataset.k] || [];
+        const i = arr.indexOf(t.dataset.v);
+        i >= 0 ? arr.splice(i, 1) : arr.push(t.dataset.v);
+        if (!arr.length) delete f[t.dataset.k];
+      } else if (t.dataset.rate !== undefined) { if (t.dataset.rate) f.rate = t.dataset.rate === 'none' ? 'none' : +t.dataset.rate; else delete f.rate; }
+      else if (t.dataset.folder !== undefined) { if (t.dataset.folder) f.folder = t.dataset.folder; else delete f.folder; }
+      else if (t.classList.contains('fl-more')) { t.classList.add('open'); body.querySelectorAll(`.fl-more[data-k="${t.dataset.k}"]`).forEach(x => x.classList.add('open')); }
+      else if (t.dataset.use) f = JSON.parse(JSON.stringify(this._savedFilters.find(x => x.id === t.dataset.use).f));
+      else if (t.dataset.drop) {
+        const x = this._savedFilters.find(y => y.id === t.dataset.drop);
+        if (!(await confirmDialog({ title: `删除我的筛选「${x.name}」？`, message: '只是删掉这个保存的组合，书不受影响。', ok: '删除', danger: true }))) return;
+        this._savedFilters = this._savedFilters.filter(y => y !== x);
+        await DB.setPref('savedFilters', this._savedFilters);
+      }
+      else if (t.classList.contains('fl-clear')) f = {};
+      else if (t.classList.contains('fl-save')) {
+        const name = (await promptDialog({ title: '存为我的筛选', placeholder: '比如：没读完的长篇', ok: '保存', max: 20 }))?.trim();
+        if (!name) return;
+        this._savedFilters = [...this._savedFilters.filter(y => y.name !== name), { id: 's' + Date.now().toString(36), name, f: JSON.parse(JSON.stringify(f)) }];
+        await DB.setPref('savedFilters', this._savedFilters);
+        toast(`已保存「${name}」`);
+      }
+      else if (t.classList.contains('fl-go')) {
+        this.flt = filterCount(f) ? f : null;
+        await s.close();
+        scrollTo(0, 0);
+        return this.render();
+      }
+      draw();
+    };
+  },
+
+  // ---------- searching text across the shelf (搜索 → 正文 / 摘录) ----------
+  // 正文: every book's chapters, most recently read first; results appear as they are found and
+  // a newer query stops the old one. 摘录: highlights, their notes and bookmark notes.
+  // Tap a result: the book opens on that spot and the words light up.
+  searchMode: 'books',
+  async renderFind(grid) {
+    const q = this.query, token = this._findToken = (this._findToken || 0) + 1;
+    const count = document.getElementById('shelf-count');
+    const item = (b, ch, off, len, text, extra = '') => `<a href="#" class="fr" data-id="${esc(b.id)}" data-ch="${ch}" data-off="${off}" data-len="${len}"${extra}>
+      <div class="fr-top"><span>${esc(bookName(b.title))}</span><small>${esc(b.chTitles?.[ch] || `第 ${ch + 1} 章`)}</small></div><div class="fr-text">${text}</div></a>`;
+    grid.innerHTML = '<div class="find-list"></div>';
+    const box = grid.firstElementChild;
+    grid.onclick = null;
+    box.onclick = async e => {
+      const a = e.target.closest('.fr');
+      if (!a) return;
+      e.preventDefault(); e.stopPropagation();
+      await openBook(a.dataset.id);
+      Reader.goTo(+a.dataset.ch, +a.dataset.off, a.dataset.mark || undefined);
+      if (!a.dataset.mark) Reader.flashFind(+a.dataset.off, +a.dataset.len);
+    };
+    const byId = new Map(this.books.map(b => [b.id, b]));
+    if (this.searchMode === 'notes') {
+      const k = normText(q);
+      const notes = (await DB.allNotes()).filter(n => byId.has(n.bookId) && normText(`${n.text || ''}\n${n.note || ''}`).includes(k))
+        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+      if (token !== this._findToken) return;
+      count.innerHTML = `<span>找到 ${notes.length} 条摘录</span>`;
+      box.innerHTML = notes.length ? notes.slice(0, 300).map(n => {
+        const b = byId.get(n.bookId), t = n.text || '', i = normText(t).indexOf(k);
+        const quote = i >= 0 ? findSnippet(t, i, q.length, 30, 60) : esc(t.slice(0, 80));
+        const note = n.note ? `<div class="fr-note">${normText(n.note).includes(k) ? findSnippet(n.note, normText(n.note).indexOf(k), q.length, 30, 60) : esc(n.note)}</div>` : '';
+        return item(b, n.ch, n.start || 0, 0, `<span class="fr-kind">${n.type === 'bookmark' ? '书签' : '高亮'}</span>${quote}${note}`, ` data-mark="${esc(n.type === 'mark' ? n.id : '')}"`);
+      }).join('') : `<div class="empty small"><p class="empty-sub">没有找到「${esc(q)}」</p></div>`;
+      return;
+    }
+    // 正文
+    const books = [...this.books].sort((a, b) => (b.lastReadAt || b.addedAt || 0) - (a.lastReadAt || a.addedAt || 0));
+    let hits = 0, done = 0;
+    const MAX = 300, PER_BOOK = 20;
+    count.innerHTML = `<span>正在搜索…</span>`;
+    for (const b of books) {
+      if (token !== this._findToken) return;
+      const c = await DB.getContent(b.id);
+      if (token !== this._findToken) return;
+      done++;
+      let html = '', n = 0;
+      for (let ch = 0; c && ch < c.chapters.length && n < PER_BOOK; ch++) {
+        const t = chapterPlain(c.chapters[ch].html);
+        for (const off of findAll(t, q, PER_BOOK - n)) {
+          b.chTitles = b.chTitles || c.chapters.map(x => x.title);
+          html += item(b, ch, off, q.length, findSnippet(t, off, q.length)); n++;
+        }
+      }
+      if (html) { box.insertAdjacentHTML('beforeend', html); hits += n; }
+      if (done % 10 === 0 || done === books.length) {
+        count.innerHTML = `<span>${done < books.length ? `正在搜索 ${done} / ${books.length} 本 · ` : ''}找到 ${hits}${hits >= MAX ? '+' : ''} 处</span>`;
+        await new Promise(r => setTimeout(r));                   // let the page breathe between books
+      }
+      if (hits >= MAX) break;
+    }
+    if (token !== this._findToken) return;
+    count.innerHTML = `<span>找到 ${hits}${hits >= MAX ? '+' : ''} 处${hits >= MAX ? '（只列前面的）' : ''}</span>`;
+    if (!hits) box.innerHTML = `<div class="empty small"><p class="empty-sub">没有找到「${esc(q)}」</p></div>`;
+  },
+
+  // ---------- tag management (更多 → 标签管理) ----------
+  // Your own tags with how many books carry each: new, rename, merge into another, delete (only
+  // takes the tag off the books). System tags are worked out from the books and only listed.
+  async saveExtraTags(list) { this._extraTags = [...new Set(list)]; await DB.setPref('extraTags', this._extraTags); },
+  async retag(from, to) {                              // to = null: delete; an existing tag: merge
+    const ids = this.books.filter(b => (b.userTags || []).includes(from)).map(b => b.id);
+    await this.update(ids, m => {
+      const set = new Set((m.userTags || []).filter(t => t !== from));
+      if (to) set.add(to);
+      m.userTags = [...set];
+    }, false);
+    await this.saveExtraTags(this._extraTags.filter(t => t !== from).concat(to && !this._extraTags.includes(to) && !ids.length ? [to] : []));
+    if (this.filter === 't:' + from) this.filter = to ? 't:' + to : 'all';
+    await this.render();
+    return ids.length;
+  },
+  openTags() {
+    const count = t => this.books.filter(b => (b.userTags || []).includes(t)).length;
+    const sys = new Map();
+    for (const b of this.books) for (const t of systemTags(b)) sys.set(t, (sys.get(t) || 0) + 1);
+    const order = ['短篇', '中篇', '长篇', '完结', '连载', '重读'];
+    const tags = this.tags();
+    const s = quickSheet(`
+      <div class="pk-title">标签管理<small>${tags.length} 个标签</small></div>
+      <div class="pk-foot"><button class="pk-row add" data-a="new">＋ 新建标签</button></div>
+      <div class="pk-list sheet-scroll tm-list">
+        ${tags.map(t => `<div class="tm-row" data-t="${esc(t)}"><span class="tm-name">#${esc(t)}</span><small>${count(t)} 本</small>
+          <button data-a="rename">改名</button><button data-a="merge">合并</button><button data-a="del" class="tm-del">删除</button></div>`).join('')
+          || '<div class="pk-empty">还没有自己的标签。在书上长按 → 标签，或在这里新建。</div>'}
+        <div class="pk-sub">系统标签（自动生成，只读）</div>
+        <div class="tag-cloud tm-sys">${order.filter(t => sys.has(t)).map(t => `<span class="tag-chip sys">${t}<small>${sys.get(t)}</small></span>`).join('') || '<span class="pk-empty">暂无</span>'}</div>
+      </div>`, 'pk-folders tm-sheet');
+    s.card.onclick = async e => {
+      const btn = e.target.closest('[data-a]');
+      if (!btn) return;
+      const a = btn.dataset.a, t = btn.closest('[data-t]')?.dataset.t;
+      if (a === 'new') {
+        const n = (await promptDialog({ title: '新建标签', placeholder: '比如：甜文、待重读', ok: '创建', max: 30 }))?.trim().replace(/^#/, '');
+        if (!n) return;
+        if (!this.tags().includes(n)) await this.saveExtraTags([...this._extraTags, n]);
+        await s.close(); this.openTags(); return;
+      }
+      if (a === 'rename') {
+        const n = (await promptDialog({ title: `给「${t}」改名`, value: t, placeholder: '新名字', ok: '改名', max: 30 }))?.trim().replace(/^#/, '');
+        if (!n || n === t) return;
+        if (this.tags().includes(n) && !(await confirmDialog({ title: `已经有「${n}」了`, message: `把「${t}」合并进「${n}」？两个标签的书都会变成「${n}」。`, ok: '合并' }))) return;
+        await this.retag(t, n);
+        toast(`已改名为「${n}」`);
+      } else if (a === 'merge') {
+        const others = this.tags().filter(x => x !== t);
+        if (!others.length) return toast('没有别的标签可以合并');
+        const p = quickSheet(`<div class="pk-title">把「${esc(t)}」合并进<small>${count(t)} 本书会改用所选标签</small></div>
+          <div class="pk-list sheet-scroll">${others.map(x => `<button class="pk-row" data-to="${esc(x)}">#${esc(x)}<small>${count(x)} 本</small></button>`).join('')}</div>`, 'pk-folders');
+        const to = await new Promise(res => { p.card.onclick = ev => { const r = ev.target.closest('[data-to]'); if (r) { p.close(); res(r.dataset.to); } }; p.onclose = () => res(null); });
+        if (!to) return;
+        await this.retag(t, to);
+        toast(`已合并进「${to}」`);
+      } else if (a === 'del') {
+        const n = count(t);
+        if (!(await confirmDialog({ title: `删除标签「${t}」？`, message: n ? `只会从 ${n} 本书上去掉这个标签，书不受影响。` : '没有书用这个标签。', ok: '删除', danger: true }))) return;
+        await this.retag(t, null);
+        toast('已删除标签');
+      }
+      await s.close(); this.openTags();
+    };
+  },
+
+  // ---------- trash (更多 → 回收站) ----------
+  // A deleted book only carries trashedAt; restore takes it off. Delete for good (one, or 全部清空)
+  // really removes the book, its text and its notes, and the next sync removes it on the other
+  // device too. After 30 days a book in the trash is deleted for good (purgeTrash, at start).
+  TRASH_DAYS: 30,
+  async purgeTrash() {
+    const limit = Date.now() - this.TRASH_DAYS * 864e5;
+    for (const m of await DB.allMeta()) if (m.trashedAt && m.trashedAt < limit) await DB.remove(m.id);
+  },
+  async openTrash() {
+    const list = (await DB.allMeta()).filter(m => m.trashedAt).sort((a, b) => b.trashedAt - a.trashedAt);
+    const left = m => Math.max(1, Math.ceil((m.trashedAt + this.TRASH_DAYS * 864e5 - Date.now()) / 864e5));
+    const s = quickSheet(`
+      <div class="pk-title">回收站<small>${list.length ? `${list.length} 本 · ${this.TRASH_DAYS} 天后自动彻底删除` : '空的'}</small></div>
+      <div class="pk-list sheet-scroll tr-list">
+        ${list.map(m => `<div class="tr-row" data-id="${esc(m.id)}">${jacket(m, 'tr-j')}
+          <div class="tr-info"><div class="tr-t">${esc(bookName(m.title))}</div><small>${new Date(m.trashedAt).toLocaleDateString('zh-CN')} 删除 · ${left(m)} 天后彻底删除</small></div>
+          <button data-a="restore">恢复</button><button data-a="purge" class="tm-del">彻底删除</button></div>`).join('')
+          || '<div class="pk-empty">删除的书会先放在这里，30 天内都能恢复。</div>'}
+      </div>
+      ${list.length ? '<div class="pk-foot"><button class="pk-row muted" data-a="empty">清空回收站</button></div>' : ''}`, 'pk-folders tr-sheet');
+    s.card.onclick = async e => {
+      const btn = e.target.closest('[data-a]');
+      if (!btn) return;
+      const a = btn.dataset.a, id = btn.closest('[data-id]')?.dataset.id, m = list.find(x => x.id === id);
+      if (a === 'restore') {
+        await this.update([id], x => { delete x.trashedAt; });
+        toast(`已恢复《${bookName(m.title)}》`);
+      } else if (a === 'purge') {
+        if (!(await confirmDialog({ title: `彻底删除《${bookName(m.title)}》？`, message: '书、阅读进度、书签、笔记和评分都会被删除，另一台设备同步后也会删除，无法恢复。', ok: '彻底删除', danger: true }))) return;
+        await DB.remove(id);
+        toast('已彻底删除');
+      } else if (a === 'empty') {
+        if (!(await confirmDialog({ title: `清空回收站？`, message: `${list.length} 本书会被彻底删除，另一台设备同步后也会删除，无法恢复。`, ok: '清空', danger: true }))) return;
+        for (const x of list) await DB.remove(x.id);
+        toast('回收站已清空');
+      }
+      await s.close();
+      await this.render();
+      if (a !== 'empty') this.openTrash();
+    };
   },
 
   // ---------- pickers ----------
@@ -1294,6 +1641,10 @@ const Library = {
     sb.innerHTML = `${ICON_SORT}<span>${def.name}</span><b>${arrow}</b>`;
     sb.setAttribute('aria-label', `排序：${def.name}`);
     sb.classList.toggle('hidden', !this.books.length);
+    const fb = document.getElementById('btn-filter'), fn = filterCount(this.flt);
+    fb.classList.toggle('hidden', !this.books.length);
+    fb.classList.toggle('on', !!fn);
+    fb.querySelector('.filter-n').textContent = fn || '';
   },
   openSortMenu() {
     const cur = shelfSort();

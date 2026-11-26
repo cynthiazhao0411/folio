@@ -394,7 +394,7 @@ const Sync = {
     const msg = [];
     if (kept) msg.push(`有 ${kept} 篇没能保存，先留在收件箱，下次打开再试`);
     else if (unsynced) msg.push('收到的作品已存在本机，还没同步到云端，先留在收件箱，下次再试');
-    else if (total.count) msg.push('收到作品：' + importSummary(total));
+    else if (total.count) msg.push((total.added ? '收到 ' : '') + importSummary(total));
     if (skipped) msg.push(`${skipped} 篇没有正文，已跳过`);
     if (msg.length) toast(msg.join(' · '));
     if (box.shelf) await this.writeShelfList(box.shelf);
@@ -402,7 +402,7 @@ const Sync = {
 
   // The bookmark compares this list with the site to find new chapters
   async writeShelfList(shelf) {
-    const list = (await DB.allMeta()).map(m => {
+    const list = (await DB.allMeta()).filter(m => !m.trashedAt).map(m => {   // a book in the trash is not on the shelf
       const w = (m.source || '').match(/\/works\/(\d+)/)?.[1];
       const stats = Object.entries(m.tags || {}).find(([k]) => /stat/i.test(k))?.[1]?.[0] || '';
       const ch = stats.match(/Chapters:\s*(\d+)\s*\/\s*(\d+|\?)/);
