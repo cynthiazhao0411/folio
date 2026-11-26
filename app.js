@@ -838,13 +838,43 @@ async function cleanTitles() {
 // bar hides in the reader and while choosing books.
 const PAGES = { shelf: 'shelf', foot: 'page-foot', clip: 'page-clip' };
 let page = 'shelf';
+// One ochre capsule slides from the old page to the new one; on the way it stretches over both a
+// little and settles (the label of the new page unfolds at the same time).
+const navPill = document.querySelector('#bottom-nav .nav-pill');
+function placePill(animate) {
+  // where the chosen button will be once its label has unfolded: measured on a hidden copy, so the
+  // real buttons keep animating
+  const nav = document.getElementById('bottom-nav'), copy = nav.cloneNode(true);
+  copy.classList.add('measuring'); copy.removeAttribute('id');
+  copy.style.visibility = 'hidden'; copy.style.pointerEvents = 'none';
+  document.body.appendChild(copy);
+  const b = copy.querySelector('[data-page].on');
+  const to = b && { x: b.offsetLeft, w: b.offsetWidth };
+  copy.remove();
+  if (!to) return;
+  const from = navPill._at;
+  navPill._at = to;
+  navPill.style.transform = `translateX(${to.x}px)`;
+  navPill.style.width = to.w + 'px';
+  if (!animate || !from || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const l = Math.min(from.x, to.x), r = Math.max(from.x + from.w, to.x + to.w);
+  navPill.animate([
+    { transform: `translateX(${from.x}px)`, width: from.w + 'px' },
+    { transform: `translateX(${l + (r - l) * .1 * (to.x > from.x ? 1 : 0)}px)`, width: (r - l) * .9 + 'px', offset: .42 },
+    { transform: `translateX(${to.x}px)`, width: to.w + 'px' },
+  ], { duration: 560, easing: 'cubic-bezier(.32,.72,.24,1)' });
+}
 function showPage(p) {
   if (p === page) { if (p === 'shelf') scrollTo({ top: 0, behavior: 'smooth' }); return; }
   page = p;
   for (const [k, id] of Object.entries(PAGES)) document.getElementById(id).classList.toggle('hidden', k !== p);
   document.querySelectorAll('#bottom-nav [data-page]').forEach(b => b.classList.toggle('on', b.dataset.page === p));
+  placePill(true);
   scrollTo(0, 0);
 }
+requestAnimationFrame(() => placePill(false));
+addEventListener('resize', () => placePill(false));
+if (document.fonts) document.fonts.ready.then(() => placePill(false));
 document.getElementById('bottom-nav').onclick = e => { const b = e.target.closest('[data-page]'); if (b) showPage(b.dataset.page); };
 
 Library.purgeTrash().catch(() => {}).finally(() => cleanTitles()).finally(renderShelf);     // books 30 days in the trash are deleted for good

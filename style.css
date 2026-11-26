@@ -1293,3 +1293,26 @@ body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-n
 .tab-empty { margin-top: 18vh; text-align: center; }
 .tab-empty-icon { width: 72px; height: 72px; margin: 0 auto 14px; border-radius: 22px; display: grid; place-items: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tab-empty .empty-sub { max-width: 22em; margin: 6px auto 0; line-height: 1.7; }
+
+/* A small, short bar; the chosen page sits on a softly coloured capsule that slides between the
+   buttons (Library app's showPage moves it) and rises just above the bar. The bar sits left of
+   centre so the 底色 button fits beside it, both on the same bottom line. Phone and computer alike. */
+.bottom-nav { left: 50%; bottom: calc(env(safe-area-inset-bottom) * .55 + 12px); transform: translateX(calc(-50% - 34px));
+  align-items: flex-end; gap: 4px; padding: 4px 5px; height: 44px; box-sizing: border-box; overflow: visible; isolation: isolate; }
+body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-nav { transform: translate(calc(-50% - 34px), 30px); }
+.bottom-nav .nav-pill { position: absolute; left: 0; bottom: 4px; height: 44px; width: 0; z-index: -1; border-radius: 999px; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 66%, color-mix(in srgb, var(--fg) 90%, var(--bg)));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 16%, transparent);
+  transition: transform .56s cubic-bezier(.32,.72,.24,1), width .56s cubic-bezier(.32,.72,.24,1); }
+.bottom-nav.measuring .nav-pill, .bottom-nav.measuring button, .bottom-nav.measuring button span { transition: none !important; }
+body.theme-night .bottom-nav .nav-pill { background: color-mix(in srgb, var(--accent) 70%, color-mix(in srgb, var(--fg) 90%, var(--bg))); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+.bottom-nav button { position: relative; height: 36px; padding: 0 12px; transform: none; border-radius: 999px; background: none !important; box-shadow: none !important;
+  transition: padding .56s cubic-bezier(.32,.72,.24,1), color .35s, transform .2s; }
+.bottom-nav button span { transition: max-width .56s cubic-bezier(.32,.72,.24,1), opacity .3s .08s; }
+.bottom-nav button svg, .bottom-nav button[data-page="shelf"] svg { width: 19px; height: 19px; transition: transform .45s cubic-bezier(.34,1.56,.64,1); }
+.bottom-nav button.on { padding: 0 15px; transform: translateY(-4px); color: color-mix(in srgb, var(--bg) 94%, var(--accent)); font-weight: 600; }
+.bottom-nav button.on svg { transform: scale(1.06); }
+.bottom-nav button:active { transform: scale(.92); }
+.bottom-nav button.on:active { transform: translateY(-4px) scale(.95); }
+/* 底色 keeps its look; it just rests on the same bottom line as the bar */
+.shelf-theme { bottom: calc(env(safe-area-inset-bottom) * .55 + 12px) !important; height: 44px; padding: 0 14px 0 12px; }
