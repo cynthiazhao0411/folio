@@ -959,7 +959,7 @@ body.theme-night .bc-delete { color: #e0806b; }
   box-shadow: 0 4px 14px rgba(0,0,0,.1); transition: transform .2s cubic-bezier(.34,1.56,.64,1);
 }
 .shelf-theme:active { transform: scale(.92); }
-#shelf.selecting .shelf-theme { display: none; }
+body:has(#shelf.selecting) .shelf-theme, body:has(#reader:not(.hidden)) .shelf-theme { display: none; }
 body.theme-fade, body.theme-fade #shelf, body.theme-fade .card-info, body.theme-fade .continue, body.theme-fade .shelf-theme {
   transition: background-color .4s, color .4s, border-color .4s;
 }
