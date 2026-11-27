@@ -1297,11 +1297,11 @@ body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-n
 /* A small, short bar; the chosen page sits on a softly coloured capsule that slides between the
    buttons (Library app's showPage moves it) and rises just above the bar. The bar sits left of
    centre so the 底色 button fits beside it, both on the same bottom line. Phone and computer alike. */
-.bottom-nav { left: 50%; bottom: calc(env(safe-area-inset-bottom) * .55 + 12px); transform: translateX(calc(-50% - 34px));
+.bottom-nav { left: 50%; bottom: calc(env(safe-area-inset-bottom) * .55 + 12px); transform: translateX(-50%);
   align-items: flex-end; gap: 4px; padding: 4px 5px; height: 44px; box-sizing: border-box; overflow: visible; isolation: isolate; }
-body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-nav { transform: translate(calc(-50% - 34px), 30px); }
+body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-nav { transform: translate(-50%, 30px); }
 /* any sheet or dialog open (更多, filters, a book's card…): the bar and 底色 step aside */
-body:has(.sheet-modal:not(.hidden)) .bottom-nav, body:has(.alert) .bottom-nav, body:has(.bookcard-wrap) .bottom-nav { opacity: 0; pointer-events: none; transform: translate(calc(-50% - 34px), 30px); }
+body:has(.sheet-modal:not(.hidden)) .bottom-nav, body:has(.alert) .bottom-nav, body:has(.bookcard-wrap) .bottom-nav { opacity: 0; pointer-events: none; transform: translate(-50%, 30px); }
 body:has(.sheet-modal:not(.hidden)) .shelf-theme, body:has(.alert) .shelf-theme, body:has(.bookcard-wrap) .shelf-theme { opacity: 0; pointer-events: none; }
 .shelf-theme { transition: opacity .25s; }
 .bottom-nav .nav-pill { position: absolute; left: 0; bottom: 4px; height: 44px; width: 0; z-index: -1; border-radius: 999px; pointer-events: none;
@@ -1320,3 +1320,10 @@ body.theme-night .bottom-nav .nav-pill { background: color-mix(in srgb, var(--ac
 .bottom-nav button.on:active { transform: translateY(-4px) scale(.95); }
 /* 底色 keeps its look; it just rests on the same bottom line as the bar */
 .shelf-theme { bottom: calc(env(safe-area-inset-bottom) * .55 + 12px) !important; height: 44px; padding: 0 14px 0 12px; }
+
+/* The bar is centred; 底色 stays at the bottom right on the same line. On a phone it is a round
+   icon-only button so the two never touch. */
+@media (max-width: 600px) {
+  .shelf-theme { width: 44px; padding: 0 !important; justify-content: center; border-radius: 50%; }
+  .shelf-theme span { display: none; }
+}

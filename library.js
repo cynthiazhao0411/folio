@@ -1665,16 +1665,26 @@ const Library = {
     });
   },
   // A small menu under a header button; `pick` gets the tapped item
+  // A small menu under a button. Tapping the same button again closes it (a toggle); tapping
+  // anywhere else closes it too; another button's menu replaces it.
   popMenu(btn, html, pick) {
-    document.querySelector('.mode-menu')?.remove();
+    const open = document.querySelector('.mode-menu');
+    if (open) { const same = open._btn === btn; open._close?.(); if (same) return; }
     const r = btn.getBoundingClientRect(), menu = document.createElement('div');
+    menu._btn = btn;
     menu.className = 'mode-menu';
     menu.innerHTML = html;
     menu.style.top = (r.bottom + 6) + 'px';
     menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
     document.body.appendChild(menu);
     menu.animate([{ opacity: 0, transform: 'translateY(-4px) scale(.97)' }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' });
-    const close = () => { menu.remove(); removeEventListener('pointerdown', outside, true); };
+    const close = () => {
+      removeEventListener('pointerdown', outside, true);
+      if (!menu.isConnected) return;
+      menu.style.pointerEvents = 'none';
+      menu.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(-4px) scale(.97)' }], { duration: 140, easing: 'ease-in' }).finished.then(() => menu.remove(), () => menu.remove());
+    };
+    menu._close = () => { close(); menu.remove(); };
     const outside = e => { if (!menu.contains(e.target) && !btn.contains(e.target)) close(); };
     setTimeout(() => addEventListener('pointerdown', outside, true));
     menu.onclick = e => { const b = e.target.closest('button'); if (!b) return; close(); pick(b); };
