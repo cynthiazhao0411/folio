@@ -1327,3 +1327,11 @@ body.theme-night .bottom-nav .nav-pill { background: color-mix(in srgb, var(--ac
   .shelf-theme { width: 44px; padding: 0 !important; justify-content: center; border-radius: 50%; }
   .shelf-theme span { display: none; }
 }
+
+/* Searching in the contents sheet: the search box sits at the top (under the tabs) and the book's
+   details step aside, so the iPhone keyboard never has to push the page up */
+.sheet-card.tall > .sheet-grip { order: -3; }
+.sheet-card.tall > .sheet-head { order: -2; }
+.sheet-card.searching .toc-search { order: -1; border-top: 0; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.sheet-card.searching .toc-book { display: none; }
+.sheet-card.searching .toc-results { padding-bottom: 45vh; }      /* the last results can be scrolled above the keyboard */

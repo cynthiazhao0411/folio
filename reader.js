@@ -765,21 +765,28 @@ const Reader = {
       sRes.scrollTop = 0;
     };
     sIn.oninput = () => { clearTimeout(sTimer); sTimer = setTimeout(runSearch, 180); };
-    // iPhone keyboard: while it is up, the sheet fits exactly into the visible part of the screen
-    // (its search box sits right on top of the keyboard and its top stays reachable); when it goes
-    // down the sheet and the page go back where they were
-    const vv = window.visualViewport;
-    const fitVV = () => { if (!vv) return; modal.style.top = vv.offsetTop + 'px'; modal.style.height = vv.height + 'px'; modal.style.bottom = 'auto'; };
-    const unfitVV = () => {
-      vv?.removeEventListener('resize', fitVV); vv?.removeEventListener('scroll', fitVV);
-      modal.style.top = modal.style.height = modal.style.bottom = '';
-      scrollTo(0, 0); setTimeout(() => scrollTo(0, 0), 120);
+    // iPhone keyboard: a search box at the bottom makes iOS push the whole page up (and leave it
+    // there). So the box moves to the top of the sheet first — under the tabs, the book's details
+    // set aside — and only then gets the keyboard: nothing needs pushing. With an empty box and the
+    // keyboard gone it goes back down; the page is put back in place a few times while the
+    // keyboard animates away.
+    const card = modal.querySelector('.sheet-card');
+    const toTop = () => card.classList.add('searching');
+    const settle = () => { for (const t of [0, 80, 300, 700]) setTimeout(() => { if (document.activeElement !== sIn) { scrollTo(0, 0); document.documentElement.scrollTop = document.body.scrollTop = 0; } }, t); };
+    // The tap itself moves the box and focuses it (the finger's own click would otherwise land on
+    // whatever is now under it); focusing inside the touch keeps the keyboard allowed on iOS.
+    const tapBox = e => {
+      if (e.target.closest('.ts-clear') || document.activeElement === sIn) return;
+      e.preventDefault(); toTop(); sIn.focus();
     };
-    sIn.addEventListener('focus', () => { vv?.addEventListener('resize', fitVV); vv?.addEventListener('scroll', fitVV); setTimeout(fitVV, 60); });
-    sIn.addEventListener('blur', unfitVV);
-    if (find) sIn.focus();                                  // opened from 🔍: type straight away (keyboard comes up)
+    modal.querySelector('.ts-box').addEventListener('touchend', tapBox);
+    modal.querySelector('.ts-box').addEventListener('mousedown', tapBox);
+    sIn.addEventListener('focus', toTop);
+    sIn.addEventListener('blur', () => { if (!sIn.value.trim()) card.classList.remove('searching'); settle(); });
+    if (find) { card.classList.add('searching'); sIn.focus(); }   // opened from 🔍: type straight away (keyboard comes up)
     sIn.onkeydown = e => { if (e.key === 'Enter') { clearTimeout(sTimer); runSearch(); sIn.blur(); } };
     sClr.onclick = e => { e.preventDefault(); sIn.value = ''; runSearch(); sIn.focus(); };
+
     modal.querySelector('.ts-scope').onclick = e => {
       const s2 = e.target.closest('[data-scope]');
       if (!s2) return;
