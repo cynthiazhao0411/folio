@@ -772,7 +772,23 @@ const Reader = {
     // keyboard animates away.
     const card = modal.querySelector('.sheet-card');
     const toTop = () => card.classList.add('searching');
-    const settle = () => { for (const t of [0, 80, 300, 700]) setTimeout(() => { if (document.activeElement !== sIn) { scrollTo(0, 0); document.documentElement.scrollTop = document.body.scrollTop = 0; } }, t); };
+    // What iOS actually moves is not the page but the containers around the sheet (they are set not
+    // to scroll, but focusing an input scrolls them anyway). Keep every container above the sheet's
+    // card at 0 while typing, and zero them again when the keyboard goes.
+    const unshift = () => {
+      for (let el = card.parentElement; el; el = el.parentElement) if (el.scrollTop || el.scrollLeft) { el.scrollTop = 0; el.scrollLeft = 0; }
+      if (scrollY || scrollX) scrollTo(0, 0);
+    };
+    const pin = e => {
+      const t = e.target;
+      if (t === document || t === document.documentElement || t === document.body || (t.nodeType === 1 && t.contains(card) && t !== card)) unshift();
+    };
+    const settle = () => {
+      for (const t of [0, 80, 300, 700]) setTimeout(() => { if (document.activeElement !== sIn) unshift(); }, t);
+      setTimeout(() => { if (document.activeElement !== sIn) document.removeEventListener('scroll', pin, true); }, 800);
+    };
+    sIn.addEventListener('focus', () => { document.addEventListener('scroll', pin, true); unshift(); });
+    unshift();                                             // a shift left over from before is cleared when the sheet opens
     // The tap itself moves the box and focuses it (the finger's own click would otherwise land on
     // whatever is now under it); focusing inside the touch keeps the keyboard allowed on iOS.
     const tapBox = e => {

@@ -109,7 +109,7 @@ input, textarea, select { font-family: inherit; }   /* form fields do not inheri
 .empty-hint { color: var(--muted); font-size: .75em; margin-top: 1.4em; }
 
 /* ========== Reader ========== */
-#reader { position: fixed; inset: 0; z-index: 50; overflow: hidden; background: var(--bg); }
+#reader { position: fixed; inset: 0; z-index: 50; overflow: hidden; overflow: clip; background: var(--bg); }   /* clip: nothing (not even iOS making room for the keyboard) can scroll it */
 .stack { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .view, .view-inner { position: absolute; inset: 0; will-change: transform; }
 .view { overflow: hidden; background: var(--bg); }
@@ -198,6 +198,9 @@ body.theme-night .curl-shadow { background: linear-gradient(to right, rgba(0,0,0
 #btn-find b { display: flex; justify-content: center; align-items: center; }
 #reader:not(.menu-open) #topbar { transform: translateY(-100%); opacity: 0; }
 #reader:not(.menu-open) #bottombar { transform: translateY(100%); opacity: 0; }
+/* hidden bars are really gone: not clickable, not there for anything to scroll to */
+#reader:not(.menu-open) .bar { visibility: hidden; pointer-events: none; transition: transform .25s ease, opacity .25s, visibility 0s .25s; }
+#reader.menu-open .bar { visibility: visible; transition: transform .25s ease, opacity .25s, visibility 0s; }
 #book-title { flex: 1; text-align: center; font-size: .92em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 .5em; }
 .bar-spacer { width: 4.5em; }
 .bar-icon { width: 4.5em; display: flex; align-items: center; justify-content: flex-end; }
@@ -230,7 +233,7 @@ body.theme-night .curl-shadow { background: linear-gradient(to right, rgba(0,0,0
 .panel a.current { color: var(--accent); font-weight: 600; }
 
 /* Bottom sheet */
-.sheet-modal { position: absolute; inset: 0; z-index: 30; background: rgba(0,0,0,0); display: flex; align-items: flex-end; }
+.sheet-modal { position: absolute; inset: 0; overflow: hidden; overflow: clip; z-index: 30; background: rgba(0,0,0,0); display: flex; align-items: flex-end; }
 .sheet-card {
   width: 100%; max-height: 72%; display: flex; flex-direction: column; background: var(--card);
   border-radius: 18px 18px 0 0; padding: 8px 1.5em calc(env(safe-area-inset-bottom) + 1.2em);
