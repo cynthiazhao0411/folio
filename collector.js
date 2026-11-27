@@ -294,7 +294,8 @@
   async function markArrival(last) {
     const path = '/contents/inbox/arrived.json';
     const body = { message: 'inbox: arrived', branch: CFG.branch,
-      content: utf8b64(JSON.stringify({ id: String(last.id), title: String(last.title || '').slice(0, 80), at: Date.now() })) };
+      content: utf8b64(JSON.stringify({ id: String(last.id), title: String(last.title || '').slice(0, 80), at: Date.now(),
+        from: /iPhone|iPod|Android|Mobile/i.test(navigator.userAgent) ? 'phone' : 'computer' })) };   // only that kind of device jumps to it
     for (let i = 0; i < 3; i++) {
       try { await api('PUT', body, path); return; } catch (e) {
         if (e.status !== 422 && e.status !== 409) return;  // 422: the file is there (its sha is needed); 409: it changed meanwhile

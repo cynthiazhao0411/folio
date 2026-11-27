@@ -609,6 +609,10 @@ async function freshArrival() {
   try {
     const a = JSON.parse(await Repo.file('inbox/arrived.json') || 'null');
     if (!a?.id || !a.at || Date.now() - a.at > ARRIVAL_FRESH) return null;
+    // Collected on the phone → only the phone opens it on launch, and the same for the computer.
+    // (Tapping a notification still opens the book on whichever device it is tapped.)
+    const here = /iPhone|iPod|Android|Mobile/i.test(navigator.userAgent) ? 'phone' : 'computer';
+    if (a.from && a.from !== here) return null;
     return +(localStorage.getItem('folio-arrival-seen') || 0) >= a.at ? null : a;
   } catch (e) { arrivalLog('读不到到达记录：' + e.message); return null; }
 }

@@ -1300,6 +1300,10 @@ body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-n
 .bottom-nav { left: 50%; bottom: calc(env(safe-area-inset-bottom) * .55 + 12px); transform: translateX(calc(-50% - 34px));
   align-items: flex-end; gap: 4px; padding: 4px 5px; height: 44px; box-sizing: border-box; overflow: visible; isolation: isolate; }
 body:has(#reader:not(.hidden)) .bottom-nav, body:has(#shelf.selecting) .bottom-nav { transform: translate(calc(-50% - 34px), 30px); }
+/* any sheet or dialog open (更多, filters, a book's card…): the bar and 底色 step aside */
+body:has(.sheet-modal:not(.hidden)) .bottom-nav, body:has(.alert) .bottom-nav, body:has(.bookcard-wrap) .bottom-nav { opacity: 0; pointer-events: none; transform: translate(calc(-50% - 34px), 30px); }
+body:has(.sheet-modal:not(.hidden)) .shelf-theme, body:has(.alert) .shelf-theme, body:has(.bookcard-wrap) .shelf-theme { opacity: 0; pointer-events: none; }
+.shelf-theme { transition: opacity .25s; }
 .bottom-nav .nav-pill { position: absolute; left: 0; bottom: 4px; height: 44px; width: 0; z-index: -1; border-radius: 999px; pointer-events: none;
   background: color-mix(in srgb, var(--accent) 66%, color-mix(in srgb, var(--fg) 90%, var(--bg)));
   box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 16%, transparent);
