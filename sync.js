@@ -406,7 +406,9 @@ const Sync = {
       const w = (m.source || '').match(/\/works\/(\d+)/)?.[1];
       const stats = Object.entries(m.tags || {}).find(([k]) => /stat/i.test(k))?.[1]?.[0] || '';
       const ch = stats.match(/Chapters:\s*(\d+)\s*\/\s*(\d+|\?)/);
-      return w && { w, c: m.chapterCount || 0, t: m.title, done: !!ch && ch[1] === ch[2] };
+      // c: chapters the site had when the book was last collected (its own count; Folio's count of
+      // chapters can differ, e.g. a chapter without text), so 'new chapters' means really new ones
+      return w && { w, c: Math.max(ch ? +ch[1] : 0, m.chapterCount || 0), t: m.title, done: !!ch && ch[1] === ch[2] };
     }).filter(Boolean);
     const text = JSON.stringify(list);
     if (this.repoMode) {

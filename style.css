@@ -1200,7 +1200,7 @@ html[data-nav="out"]::view-transition-old(folio-grid) { z-index: 2; }
 
 /* Search inside the book: the box at the bottom of the contents sheet (Reader.showToc) */
 .sheet-card.tall { display: flex; flex-direction: column; }
-.toc-search { flex: none; display: flex; gap: 8px; align-items: center; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: inherit; }
+.toc-search { flex: none; display: flex; gap: 8px; align-items: center; padding: 10px 16px max(8px, calc(env(safe-area-inset-bottom) - 14px)); border-top: 1px solid var(--line); background: inherit; }
 .toc-search .ts-box { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 10px; border-radius: 12px; background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--muted); }
 .toc-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; color: var(--fg); font: inherit; font-size: 16px; }
 .toc-search input::-webkit-search-cancel-button { display: none; }

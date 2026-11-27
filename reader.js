@@ -765,6 +765,18 @@ const Reader = {
       sRes.scrollTop = 0;
     };
     sIn.oninput = () => { clearTimeout(sTimer); sTimer = setTimeout(runSearch, 180); };
+    // iPhone keyboard: while it is up, the sheet fits exactly into the visible part of the screen
+    // (its search box sits right on top of the keyboard and its top stays reachable); when it goes
+    // down the sheet and the page go back where they were
+    const vv = window.visualViewport;
+    const fitVV = () => { if (!vv) return; modal.style.top = vv.offsetTop + 'px'; modal.style.height = vv.height + 'px'; modal.style.bottom = 'auto'; };
+    const unfitVV = () => {
+      vv?.removeEventListener('resize', fitVV); vv?.removeEventListener('scroll', fitVV);
+      modal.style.top = modal.style.height = modal.style.bottom = '';
+      scrollTo(0, 0); setTimeout(() => scrollTo(0, 0), 120);
+    };
+    sIn.addEventListener('focus', () => { vv?.addEventListener('resize', fitVV); vv?.addEventListener('scroll', fitVV); setTimeout(fitVV, 60); });
+    sIn.addEventListener('blur', unfitVV);
     if (find) sIn.focus();                                  // opened from 🔍: type straight away (keyboard comes up)
     sIn.onkeydown = e => { if (e.key === 'Enter') { clearTimeout(sTimer); runSearch(); sIn.blur(); } };
     sClr.onclick = e => { e.preventDefault(); sIn.value = ''; runSearch(); sIn.focus(); };
@@ -811,7 +823,7 @@ const Reader = {
       const a = e.target.closest('[data-ch]');
       if (!a) return;
       e.preventDefault();
-      if (a.dataset.len) { this.goTo(+a.dataset.ch, +a.dataset.off); this.flashFind(+a.dataset.off, +a.dataset.len); }
+      if (a.dataset.len) { modal.querySelector('.toc-search input')?.blur(); this.goTo(+a.dataset.ch, +a.dataset.off); this.flashFind(+a.dataset.off, +a.dataset.len); }
       else if (a.dataset.off !== undefined) this.goTo(+a.dataset.ch, +a.dataset.off, a.dataset.id);
       else this.goChapter(+a.dataset.ch);
       Sheet.close(modal);

@@ -224,6 +224,24 @@
     throw new Error('收件箱一直在被改动，稍后再试');
   }
   // Returns true when the work reached the inbox, false when it is held for the clipboard
+  // Chapters per work as last sent from this browser (kept two weeks): an update is only an update
+  // when the site has more chapters than both the shelf and what was already sent
+  function sentCounts() {
+    try {
+      const all = JSON.parse(localStorage.getItem('folio-sent-chapters') || '{}'), now = Date.now(), keep = {};
+      for (const [w, v] of Object.entries(all)) if (now - v.at < 14 * 864e5) keep[w] = v.n;
+      return keep;
+    } catch { return {}; }
+  }
+  function rememberSent(w, html) {
+    const n = +((html || '').match(/Chapters:\s*(\d+)/) || [])[1];
+    if (!n) return;
+    try {
+      const all = JSON.parse(localStorage.getItem('folio-sent-chapters') || '{}');
+      all[w] = { n, at: Date.now() };
+      localStorage.setItem('folio-sent-chapters', JSON.stringify(all));
+    } catch { /* private mode: nothing to remember */ }
+  }
   async function deliver(w) {
     if (!blocked) {
       try {
@@ -255,6 +273,10 @@
         txt = !f ? '[]' : f.truncated ? await (await send(f.raw_url)).text() : f.content;
       }
       shelf = JSON.parse(txt);
+      // Works sent since Folio last wrote this list are already on their way: count what was sent,
+      // so the same chapters are never offered (or sent) as an update twice
+      const sentNow = sentCounts();
+      for (const b of shelf) if (sentNow[b.w] > b.c) b.c = sentNow[b.w];
     } catch (e) {
       if (e?.name === 'TypeError') blocked = true; else throw e;
       shelf = [];
@@ -339,7 +361,7 @@
       try {
         const work = await fetchWork(id);
         say(`正在抓取 ${Math.min(n, total)} / ${total}` + hint, shortTitle(work.title));
-        if (await deliver(work)) { job.done.push(id); sent++; if (onShelf.has(String(id))) updated++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: bareTitle(work.title) }; }
+        if (await deliver(work)) { job.done.push(id); sent++; rememberSent(String(id), work.html); if (onShelf.has(String(id))) updated++; arrived.push(shortTitle(work.title)); lastArrived = { id, title: bareTitle(work.title) }; }
         delete job.failed[id];
       } catch (e) {
         job.failed[id] = e.message;

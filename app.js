@@ -17,6 +17,7 @@ function applySettings() {
   if (THEMES[settings.theme]) document.body.classList.add(THEMES[settings.theme]);
   const tb = document.getElementById('shelf-theme');
   if (tb) { tb.innerHTML = THEME_ICONS[settings.theme] + `<span>${THEME_NAMES[settings.theme]}</span>`; }
+  try { localStorage.setItem('folio-bg', getComputedStyle(document.body).getPropertyValue('--bg').trim()); } catch {}   // painted first at the next start
   const tc = document.querySelector('meta[name="theme-color"]');
   if (tc && document.getElementById('reader')?.classList.contains('hidden')) tc.content = getComputedStyle(document.body).getPropertyValue('--bg').trim();
   document.documentElement.style.setProperty('--font-size', settings.font + 'px');
@@ -34,21 +35,51 @@ applySettings();
 const renderShelf = () => Library.render();
 Library.bind();
 // Refresh: sync now (and collect works waiting in the inbox), then redraw the shelf
-document.getElementById('btn-refresh').onclick = async e => {
-  const btn = e.currentTarget;
-  if (btn.classList.contains('spinning')) return;
+// Refresh the shelf: sync with the other device and take in the inbox. The ⟳ button does it and
+// says how it went; opening Folio (and coming back after a minute or more) does it quietly — the
+// button turns, and only a change is announced.
+async function refreshShelf(quiet = false) {
+  const btn = document.getElementById('btn-refresh');
+  if (btn.classList.contains('spinning') || (quiet && (!Sync.on || Sync.reading() || page !== 'shelf'))) return;   // quietly: only on the shelf page
   btn.classList.add('spinning');
   const before = JSON.stringify((await DB.allMeta()).map(m => [m.id, m.chapterCount, m.lastReadAt]));
   try {
     if (Sync.on) await Sync.check(true);
-    await renderShelf();
+    if (!Sync.reading()) await renderShelf();
     const after = JSON.stringify((await DB.allMeta()).map(m => [m.id, m.chapterCount, m.lastReadAt]));
-    toast(Sync.on && Sync.st.error ? '同步失败：' + Sync.st.error
+    if (!quiet) toast(Sync.on && Sync.st.error ? '同步失败：' + Sync.st.error
       : before !== after ? '书架已更新' : Sync.on ? '已是最新 · 刚刚同步' : '已是最新（未开启设备同步）');
+    else if (before !== after && !Sync.reading()) toast('书架已更新');
   } finally {
     setTimeout(() => btn.classList.remove('spinning'), 400);
   }
-};
+}
+document.getElementById('btn-refresh').onclick = () => refreshShelf();
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); noteResume(); return; }
+  if (hiddenAt && Date.now() - hiddenAt > 60e3) setTimeout(() => refreshShelf(true), 900);
+});
+
+// ---------- coming back after iOS closed Folio in the background ----------
+// iPhone may close a home-screen app soon after you switch away. If that happens while a book is
+// open, and Folio is opened again within 10 minutes, it goes straight back into that book at the
+// same page instead of the shelf. Later, or after closing the book, it starts on the shelf.
+const RESUME_KEY = 'folio-resume', RESUME_MS = 10 * 60e3;
+function noteResume() {
+  try {
+    if (Sync.reading() && current) localStorage.setItem(RESUME_KEY, JSON.stringify({ id: current.id, at: Date.now() }));
+    else localStorage.removeItem(RESUME_KEY);
+  } catch { /* private mode */ }
+}
+function takeResume() {
+  try {
+    const r = JSON.parse(localStorage.getItem(RESUME_KEY) || 'null');
+    localStorage.removeItem(RESUME_KEY);
+    return r && Date.now() - r.at < RESUME_MS ? r.id : null;
+  } catch { return null; }
+}
+addEventListener('pagehide', noteResume);
 document.getElementById('continue').onclick = e => {
   const id = e.currentTarget.dataset.id;
   if (id) openBook(id, e.currentTarget.querySelector('.cover'));
@@ -658,9 +689,28 @@ async function arrive(target, how, marked) {
     if (Library.filter !== 'all') Library.filter = 'all';
     await Library.render();
     document.querySelector(`.card[data-id="${CSS.escape(b.id)}"]`)?.scrollIntoView({ block: 'center' });
-    await openBook(b.id, null, true);
+    // A book that got new chapters: if you had read the last old chapter to 98% (or further), it
+    // opens at the first new chapter (48 of 48–50); if not, where you left off. A new book opens at
+    // its cover page.
+    const oldN = b.newChapters && b.chapterCount > b.newChapters ? b.chapterCount - b.newChapters : 0;
+    const p = oldN && b.progress;
+    let readUp = false;
+    if (p && p.ch >= oldN) readUp = false;                                   // already reading the new ones
+    else if (p && p.ch === oldN - 1) {
+      const c = await DB.getContent(b.id);
+      const lens = (c?.chapters || []).slice(0, oldN).map(x => (x.html || '').length);
+      const total = lens.reduce((a, n) => a + n, 0), last = lens[oldN - 1] || 0;
+      readUp = total > 0 && last > 0 && ((p.pct || 0) / 100 * total - (total - last)) / last >= .98;   // pct was saved against the old book
+    }
+    if (oldN && p) {
+      await openBook(b.id);
+      if (readUp) { Reader.goChapter(oldN); arrivalLog(`已打开第 ${oldN + 1} 章（第一个新章节）`); }
+      else arrivalLog('上次还没读到最新一章，打开到上次读的位置');
+    } else {
+      await openBook(b.id, null, true);
+      arrivalLog('已打开封面页');
+    }
     opened = true;
-    arrivalLog('已打开封面页');
   } catch (e) {
     arrivalLog('出错：' + e.message);
   } finally {
@@ -675,7 +725,13 @@ async function arrive(target, how, marked) {
 addEventListener('load', () => setTimeout(async () => {
   const pending = await takePendingOpen();
   const target = arrivedBook || (pending ? arrivalBook(pending) : null);
-  arrive(target, fromCollect ? (launchedByPush ? '点通知启动' : '打开 Folio') : pending ? '点通知启动（记录）' : '启动', fromCollect || !!pending);
+  const resume = takeResume(), rm = resume && await DB.getMeta(resume);
+  if (!target && !fromCollect && rm && !rm.trashedAt) {
+    await openBook(resume);                                   // iOS closed Folio a moment ago: straight back in
+    return;
+  }
+  await arrive(target, fromCollect ? (launchedByPush ? '点通知启动' : '打开 Folio') : pending ? '点通知启动（记录）' : '启动', fromCollect || !!pending);
+  setTimeout(() => refreshShelf(true), 1200);                 // opened from the home screen: the shelf refreshes itself
 }, 300));
 if ('launchQueue' in window) launchQueue.setConsumer(p => { if (p?.targetURL !== launchHref && FROM_COLLECT.test(p?.targetURL || '')) arrive(arrivalBook(p.targetURL), '打开 Folio（已在运行）', true); });
 navigator.serviceWorker?.addEventListener('message', async e => {
@@ -875,6 +931,12 @@ function showPage(p) {
 requestAnimationFrame(() => placePill(false));
 addEventListener('resize', () => placePill(false));
 if (document.fonts) document.fonts.ready.then(() => placePill(false));
+// iPhone: typing in the reader (search, notes) scrolls the whole page up to make room for the
+// keyboard, and it stays up afterwards. When the keyboard goes away, put the page back.
+document.addEventListener('focusout', e => {
+  if (!e.target.matches?.('input, textarea') || document.getElementById('reader').classList.contains('hidden')) return;
+  setTimeout(() => { if (!document.activeElement?.matches?.('input, textarea')) { scrollTo(0, 0); document.documentElement.scrollTop = document.body.scrollTop = 0; } }, 90);
+});
 document.getElementById('bottom-nav').onclick = e => { const b = e.target.closest('[data-page]'); if (b) showPage(b.dataset.page); };
 
 Library.purgeTrash().catch(() => {}).finally(() => cleanTitles()).finally(renderShelf);     // books 30 days in the trash are deleted for good
